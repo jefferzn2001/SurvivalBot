@@ -129,11 +129,28 @@ class DataServerNode(Node):
         
         # Simple command responses (no actual hardware)
         if command.startswith("TURN"):
-            self.get_logger().info("   🔄 Simulating turn...")
+            parts = command.split(",")
+            angle = parts[1] if len(parts) > 1 else "0"
+            self.get_logger().info(f"   🔄 Simulating turn {angle}°...")
+            # For real robot: Send to motor controller and wait for completion
+            # Example: self.motor_controller.turn(float(angle))
+            
         elif command.startswith("FORWARD"):
-            self.get_logger().info("   ⬆️ Simulating forward...")
+            parts = command.split(",")
+            distance = parts[1] if len(parts) > 1 else "1.0"
+            self.get_logger().info(f"   ⬆️ Simulating forward {distance}m...")
+            # For real robot: Send to motor controller and wait for completion
+            # Example: self.motor_controller.forward(float(distance))
+            
         elif command == "STOP":
             self.get_logger().info("   🛑 Simulating stop...")
+            # For real robot: Send stop command and wait for confirmation
+            # Example: self.motor_controller.stop()
+        
+        # Publish status back (useful for real robot feedback)
+        status_msg = String()
+        status_msg.data = f"COMPLETED:{command}"
+        self.status_pub.publish(status_msg)
 
 def main(args=None):
     rclpy.init(args=args)

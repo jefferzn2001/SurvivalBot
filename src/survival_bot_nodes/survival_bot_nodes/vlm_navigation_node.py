@@ -126,13 +126,19 @@ class VLMNavigationNode(Node):
             CompressedImage, 'robot/camera/compressed', self.image_callback, 10)
         self.command_pub = self.create_publisher(String, 'robot/command', 10)
         
+        # Status subscription for real robot feedback
+        self.status_sub = self.create_subscription(
+            String, 'robot/status', self.status_callback, 10)
+        self.waiting_for_completion = False
+        self.last_command = ""
+        
         # Action mapping
         self.actions = {
-            1: {"angle": -60, "desc": "Turn left 60° then forward"},
-            2: {"angle": -35, "desc": "Turn left 35° then forward"},
-            3: {"angle": 0, "desc": "Move straight forward"},
-            4: {"angle": 35, "desc": "Turn right 35° then forward"},
-            5: {"angle": 60, "desc": "Turn right 60° then forward"}
+            1: {"angle": -60, "desc": "Turn left 60° then forward 1m"},
+            2: {"angle": -35, "desc": "Turn left 35° then forward 1m"},
+            3: {"angle": 0, "desc": "Move straight forward 1m"},
+            4: {"angle": 35, "desc": "Turn right 35° then forward 1m"},
+            5: {"angle": 60, "desc": "Turn right 60° then forward 1m"}
         }
         
         # Start navigation
@@ -246,16 +252,19 @@ class VLMNavigationNode(Node):
                 turn_cmd = f"TURN,{angle}"
                 self.send_command(turn_cmd)
                 self.get_logger().info(f"   🔄 Turning {angle}°...")
-                time.sleep(3.0)
+                self.wait_for_completion(turn_cmd)
             
-            # Move forward
-            forward_cmd = "FORWARD,2.0"
+            # Move forward 1 meter (changed from 2.0)
+            forward_cmd = "FORWARD,1.0"
             self.send_command(forward_cmd)
-            self.get_logger().info(f"   ⬆️ Moving forward 2m...")
-            time.sleep(4.0)
+            self.get_logger().info(f"   ⬆️ Moving forward 1m...")
+            self.wait_for_completion(forward_cmd)
             
             # Stop
-            self.send_command("STOP")
+            stop_cmd = "STOP"
+            self.send_command(stop_cmd)
+            self.wait_for_completion(stop_cmd)
+            
             self.get_logger().info(f"✅ Action {action} completed")
             
         except Exception as e:
@@ -266,6 +275,35 @@ class VLMNavigationNode(Node):
         msg = String()
         msg.data = command
         self.command_pub.publish(msg)
+
+    def status_callback(self, msg):
+        """Handle status updates from the robot"""
+        status_data = msg.data
+        if status_data.startswith("COMPLETED:"):
+            completed_cmd = status_data.replace("COMPLETED:", "")
+            if completed_cmd == self.last_command:
+                self.waiting_for_completion = False
+                self.get_logger().info(f"✅ Robot confirmed: {completed_cmd}")
+    
+    def wait_for_completion(self, command, timeout=10.0):
+        """Wait for robot to complete the command"""
+        self.last_command = command
+        self.waiting_for_completion = True
+        
+        # Use fixed delays for simulation, or wait for feedback for real robot
+        if "TURN" in command:
+            time.sleep(3.0)  # Simulation delay
+        elif "FORWARD" in command:
+            time.sleep(3.0)  # Simulation delay  
+        elif "STOP" in command:
+            time.sleep(1.0)  # Simulation delay
+        
+        # For real robot, you could implement:
+        # start_time = time.time()
+        # while self.waiting_for_completion and (time.time() - start_time) < timeout:
+        #     rclpy.spin_once(self, timeout_sec=0.1)
+        
+        self.waiting_for_completion = False
 
 def main(args=None):
     rclpy.init(args=args)

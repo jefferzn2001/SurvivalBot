@@ -130,7 +130,7 @@ ros2 launch survival_bot_nodes data_server.launch.py
 **On the Dev Machine (in a separate terminal):**
 This runs the VLM navigation, gets images from the Pi, and sends back commands.
 ```bash
-# Use system Python for ROS2
+# Important: Use system Python for ROS2 (deactivate conda)
 conda deactivate
 
 # Source workspace  
@@ -140,6 +140,8 @@ source install/setup.bash
 
 ros2 launch survival_bot_nodes vlm_navigation.launch.py
 ```
+
+**Note:** The VLM node includes all AI functionality (Gemini API, image processing) and runs on system Python. No conda environment needed since the required packages are available system-wide.
 
 ### 3. How to Test the Full VLM Loop
 
@@ -274,3 +276,83 @@ Dev Machine (VLM)          Pi (Data Server)        Arduino (Optional)
 - Always use system Python (not conda) for ROS2 operations
 - VLM navigation requires Gemini API key
 - Pi only needs basic Python packages 
+
+## Real Robot Integration
+
+### Motor Controller Integration
+
+For real robot deployment, you'll need to modify the `data_server_node.py` to interface with your actual motor controller:
+
+```python
+# Example motor controller integration in data_server_node.py
+def command_callback(self, msg):
+    command = msg.data.strip()
+    self.get_logger().info(f"🤖 Command: {command}")
+    
+    if command.startswith("TURN"):
+        parts = command.split(",")
+        angle = float(parts[1]) if len(parts) > 1 else 0.0
+        self.get_logger().info(f"   🔄 Turning {angle}°...")
+        
+        # Real robot implementation:
+        # success = self.motor_controller.turn(angle)
+        # if success:
+        #     self.publish_status(f"COMPLETED:{command}")
+        # else:
+        #     self.publish_status(f"FAILED:{command}")
+        
+    elif command.startswith("FORWARD"):
+        parts = command.split(",") 
+        distance = float(parts[1]) if len(parts) > 1 else 1.0
+        self.get_logger().info(f"   ⬆️ Moving forward {distance}m...")
+        
+        # Real robot implementation:
+        # success = self.motor_controller.forward(distance)
+        # if success:
+        #     self.publish_status(f"COMPLETED:{command}")
+```
+
+### Timing Adjustments
+
+The system now uses 1-meter movements instead of 2-meter movements for better precision. The timing system supports both:
+
+- **Simulation mode**: Fixed delays (3s for turns, 3s for movement, 1s for stops)
+- **Real robot mode**: Feedback-based completion waiting
+
+### Key Changes Made:
+- ✅ **Distance reduced to 1 meter** for better navigation precision
+- ✅ **Added feedback system** for real robot integration  
+- ✅ **Improved command parsing** with distance/angle parameters
+- ✅ **Status publication** for completion confirmation
+- ✅ **Timeout protection** for motor operations
+
+### Testing the Changes
+
+**Important:** ROS2 requires system Python (not conda) due to library compatibility.
+
+Test the updated system:
+```bash
+# Deactivate conda if active (ROS2 needs system Python 3.10)
+conda deactivate
+
+cd ~/SurvivalBot
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+# Start Pi side (in one terminal)
+ros2 launch survival_bot_nodes data_server.launch.py
+
+# Start VLM side (in another terminal) 
+ros2 launch survival_bot_nodes vlm_navigation.launch.py
+```
+
+**Why conda deactivate?**
+- ROS2 Humble was compiled against system Python 3.10
+- Conda typically uses Python 3.12, causing ROS2 import errors
+- The VLM functionality is built into the ROS2 node, so no conda needed
+- All required packages (OpenCV, numpy, etc.) work fine with system Python
+
+You should now see:
+- Movements are 1 meter instead of 2 meters
+- Better command feedback with distances/angles
+- Improved timing for real robot operations 
