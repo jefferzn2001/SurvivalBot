@@ -17,7 +17,7 @@ setup(
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Jeff',
-    maintainer_email='jeff@seas.upenn.edu',
+    maintainer_email='jefferzn@seas.upenn.edu',
     description='SurvivalBot navigation and control nodes',
     license='MIT',
     tests_require=['pytest'],

@@ -40,8 +40,8 @@ Follow these steps on each machine.
 
 1.  **Clone the Repository:**
     ```bash
-    # Replace with your repository URL
-    git clone https://github.com/your-repo/SurvivalBot.git SurvivalBot
+    # Using SSH (recommended)
+    git clone git@github.com:jefferzn2001/SurvivalBot.git SurvivalBot
     cd SurvivalBot
     ```
 
@@ -72,7 +72,7 @@ Follow these steps on each machine.
 1.  **Clone or Pull Your Latest Code:**
     ```bash
     # If first time:
-    git clone https://github.com/your-repo/SurvivalBot.git SurvivalBot
+    git clone git@github.com:jefferzn2001/SurvivalBot.git SurvivalBot
     cd SurvivalBot
     
     # If updating existing installation:
@@ -217,7 +217,7 @@ ros2 run survival_bot_nodes joystick_controller_node
 2. **Clone and build the project:**
    ```bash
    cd ~
-   git clone https://github.com/your-repo/SurvivalBot.git SurvivalBot
+   git clone git@github.com:jefferzn2001/SurvivalBot.git SurvivalBot
    cd SurvivalBot
    
    # Install Pi dependencies
