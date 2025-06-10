@@ -4,7 +4,7 @@
   <name>survival_bot_nodes</name>
   <version>1.0.0</version>
   <description>SurvivalBot navigation and control nodes</description>
-  <maintainer email="jeff@seas.upenn.edu">Jeff</maintainer>
+  <maintainer email="jefferzn@seas.upenn.edu">Jeff</maintainer>
   <license>MIT</license>
 
   <depend>rclpy</depend>

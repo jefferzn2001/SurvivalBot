@@ -41,8 +41,8 @@ Follow these steps on each machine.
 1.  **Clone the Repository:**
     ```bash
     # Replace with your repository URL
-    git clone https://github.com/your-repo/SurvivalBot.git ros2_ws
-    cd ros2_ws
+    git clone https://github.com/your-repo/SurvivalBot.git SurvivalBot
+    cd SurvivalBot
     ```
 
 2.  **Create Conda Environment:** The VLM requires specific Python packages. Using a Conda environment prevents conflicts with system packages.
@@ -64,14 +64,19 @@ Follow these steps on each machine.
 
 5.  **Set Up Gemini API Key:** Create a `.env` file for your API key.
     ```bash
-    echo "API_KEY=your_actual_api_key_here" > src/SurvivalBot/VLMNAV/.env
+    echo "API_KEY=your_actual_api_key_here" > src/survival_bot_nodes/VLMNAV/.env
     ```
 
 ### B. Raspberry Pi Setup (for Robot Control)
 
-1.  **Pull Your Latest Code:**
+1.  **Clone or Pull Your Latest Code:**
     ```bash
-    cd ~/ros2_ws
+    # If first time:
+    git clone https://github.com/your-repo/SurvivalBot.git SurvivalBot
+    cd SurvivalBot
+    
+    # If updating existing installation:
+    cd ~/SurvivalBot
     git pull origin main
     ```
 
@@ -84,19 +89,25 @@ Follow these steps on each machine.
     ```bash
     source /opt/ros/humble/setup.bash
     colcon build --packages-select survival_bot_nodes
+    
+    # Fix package structure (run once after building)
+    mkdir -p install/survival_bot_nodes/lib/survival_bot_nodes
+    cp install/survival_bot_nodes/bin/* install/survival_bot_nodes/lib/survival_bot_nodes/
+    cp -r src/survival_bot_nodes/VLMNAV install/survival_bot_nodes/lib/python3.10/site-packages/
     ```
 
 ---
 
 ## Running & Testing the VLM System
 
-Because of a known issue with ROS2 discovery in some Python environments, `ros2 run` may not work. The most reliable method is to **use `ros2 launch` or call the executables directly.**
+**Important:** Always use system Python (not conda) for ROS2 operations to avoid library conflicts.
 
 ### 1. Source The Workspace
 
 **This is required in every new terminal.**
 ```bash
-cd ~/ros2_ws
+cd ~/SurvivalBot
+source /opt/ros/humble/setup.bash
 source install/setup.bash
 ```
 
@@ -105,8 +116,13 @@ source install/setup.bash
 **On the Raspberry Pi (in one terminal):**
 This starts the camera and listens for commands.
 ```bash
-# Activate your environment
-# (cd ~/ros2_ws && source install/setup.bash)
+# Deactivate conda if active
+conda deactivate
+
+# Source workspace
+cd ~/SurvivalBot
+source /opt/ros/humble/setup.bash
+source install/setup.bash
 
 ros2 launch survival_bot_nodes data_server.launch.py
 ```
@@ -114,9 +130,13 @@ ros2 launch survival_bot_nodes data_server.launch.py
 **On the Dev Machine (in a separate terminal):**
 This runs the VLM navigation, gets images from the Pi, and sends back commands.
 ```bash
-# Activate your environments
-# (cd ~/ros2_ws && source install/setup.bash)
-conda activate vlm_nav
+# Use system Python for ROS2
+conda deactivate
+
+# Source workspace  
+cd ~/SurvivalBot
+source /opt/ros/humble/setup.bash
+source install/setup.bash
 
 ros2 launch survival_bot_nodes vlm_navigation.launch.py
 ```
@@ -139,10 +159,14 @@ ros2 launch survival_bot_nodes vlm_navigation.launch.py
 
 ### 4. Other Useful Commands
 
-**Run Everything at Once:**
+**Run Everything at Once (for testing on single machine):**
 ```bash
-# This is useful for testing on a single machine
-# Remember to activate conda environment first
+# Deactivate conda first
+conda deactivate
+cd ~/SurvivalBot
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
 ros2 launch survival_bot_nodes survival_bot.launch.py
 ```
 
@@ -157,6 +181,64 @@ ros2 run survival_bot_nodes camera_viewer_node
 # Make sure data_server is running on the Pi
 ros2 run survival_bot_nodes joystick_controller_node
 ```
+
+## Pi Deployment Instructions
+
+### Preparing for Pi Upload
+
+1. **Test all launch files work on dev machine:**
+   ```bash
+   conda deactivate
+   cd ~/SurvivalBot
+   source /opt/ros/humble/setup.bash
+   source install/setup.bash
+   
+   # Test each launch file
+   timeout 3 ros2 launch survival_bot_nodes data_server.launch.py
+   timeout 3 ros2 launch survival_bot_nodes vlm_navigation.launch.py  
+   timeout 3 ros2 launch survival_bot_nodes survival_bot.launch.py
+   ```
+
+2. **Commit and push all changes:**
+   ```bash
+   git add .
+   git commit -m "Fix ROS package structure and launch files"
+   git push origin main
+   ```
+
+### On the Raspberry Pi
+
+1. **Install ROS2 Humble (if not already installed):**
+   ```bash
+   sudo apt update
+   sudo apt install ros-humble-desktop-lite
+   ```
+
+2. **Clone and build the project:**
+   ```bash
+   cd ~
+   git clone https://github.com/your-repo/SurvivalBot.git SurvivalBot
+   cd SurvivalBot
+   
+   # Install Pi dependencies
+   pip install -r requirements-pi.txt
+   
+   # Build the package
+   source /opt/ros/humble/setup.bash
+   colcon build --packages-select survival_bot_nodes
+   
+   # Fix package structure
+   mkdir -p install/survival_bot_nodes/lib/survival_bot_nodes
+   cp install/survival_bot_nodes/bin/* install/survival_bot_nodes/lib/survival_bot_nodes/
+   cp -r src/survival_bot_nodes/VLMNAV install/survival_bot_nodes/lib/python3.10/site-packages/
+   ```
+
+3. **Test the data server:**
+   ```bash
+   source /opt/ros/humble/setup.bash
+   source install/setup.bash
+   ros2 launch survival_bot_nodes data_server.launch.py
+   ```
 
 ## System Architecture
 
@@ -180,14 +262,15 @@ Dev Machine (VLM)          Pi (Data Server)        Arduino (Optional)
 ## Folders
 
 - **src/survival_bot_nodes/** - ROS2 package with all nodes
-- **src/SurvivalBot/VLMNAV/** - VLM processing code (annotation, prompts)
+- **src/survival_bot_nodes/VLMNAV/** - VLM processing code (annotation, prompts)
 - **requirements-dev.txt** - Dev machine dependencies (VLM/AI)
 - **requirements-pi.txt** - Pi dependencies (minimal)
 
 ## Notes
 
-- ✅ **`ros2 run` and `ros2 launch` both work!**
-- ✅ **Fixed Python package registration issue**
-- Run `./fix_ros2_executables.sh` once after building
-- VLM navigation requires conda environment with GPU dependencies
-- Pi only needs basic Python packages (or none at all) 
+- ✅ **All ROS2 launch files work properly!**
+- ✅ **Fixed Python package registration and import issues**
+- ✅ **Updated workspace name from ros2_ws to SurvivalBot**
+- Always use system Python (not conda) for ROS2 operations
+- VLM navigation requires Gemini API key
+- Pi only needs basic Python packages 
