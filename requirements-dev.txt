@@ -2,15 +2,13 @@
 # Install in conda environment: pip install -r requirements-dev.txt
 
 # Core dependencies
-opencv-python>=4.8.0
-numpy>=1.24.0
+opencv-python==4.8.1.78
+numpy==1.24.3
 
 # VLM/AI dependencies  
-google-generativeai>=0.3.0
-python-dotenv>=1.0.0
-pandas>=1.5.0
-regex>=2023.0.0
-requests>=2.28.0
+google-generativeai==0.3.2
+python-dotenv==1.0.0
+Pillow==10.0.1
 
 # PyTorch with CUDA (for future training)
 --index-url https://download.pytorch.org/whl/cu124
@@ -20,3 +18,13 @@ torchaudio==2.4.0+cu124
 
 # Optional for joystick control
 pygame>=2.1.0 
+
+# ROS2 Python packages (if needed in conda environment)
+# Note: These are usually provided by system ROS2
+# rclpy  # Provided by system ROS2
+# sensor-msgs  # Provided by system ROS2
+# std-msgs  # Provided by system ROS2
+
+# Additional useful packages
+matplotlib==3.7.2
+requests==2.31.0 
