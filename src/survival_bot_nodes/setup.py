@@ -13,6 +13,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
+        (os.path.join('lib', package_name), glob('survival_bot_nodes/*.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -31,4 +32,4 @@ setup(
             'camera_viewer_node = survival_bot_nodes.camera_viewer_node:main',
         ],
     },
-) 
+)
