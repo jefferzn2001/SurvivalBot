@@ -47,9 +47,10 @@ class JoystickControllerNode(Node):
         
         self.get_logger().info("🎮 Joystick Controller Node Started")
         self.get_logger().info(f"   Control mode: {self.control_mode}")
-        self.get_logger().info("   Left stick: Movement, LT/RT: Turn left/right")
+        self.get_logger().info("   Left stick: Movement (up=forward, left=turn left)")
+        self.get_logger().info("   LT=Turn left, RT=Turn right")
         self.get_logger().info("   PWM format: PWM,right_wheels,left_wheels")
-        self.get_logger().info("   Buttons: Mode switch")
+        self.get_logger().info("   FIXED: Stick left → robot turns left, LT → left turn")
     
     def joystick_callback(self):
         """Poll joystick for input"""
@@ -120,31 +121,36 @@ class JoystickControllerNode(Node):
             self.handle_discrete_control(left_stick_x, left_stick_y, lt_value, rt_value)
     
     def handle_pwm_control(self, stick_x, stick_y, lt_value, rt_value):
-        """Handle continuous PWM control with trigger turning - simplified without remapping"""
+        """Handle continuous PWM control with trigger turning - FIXED DIRECTIONS"""
         # Convert stick inputs to motor PWM values (-255 to 255)
         max_pwm = 255
-        trigger_turn_pwm = 150  # Exact PWM for trigger turning
+        trigger_turn_pwm = 150   # Trigger turn PWM (symmetric for both LT and RT)
         
         # Priority: Triggers override ALL other movement
         if lt_value > 0 or rt_value > 0:
             # Pure trigger turning - ignore stick inputs
             if lt_value > rt_value:
-                # Left trigger pressed - turn left
-                right_pwm = -trigger_turn_pwm  # Right wheels backward
-                left_pwm = trigger_turn_pwm    # Left wheels forward
+                # Left trigger pressed - turn left (left wheels slower/backward, right wheels faster/forward)
+                right_pwm = trigger_turn_pwm   # Right wheels forward (150)
+                left_pwm = -trigger_turn_pwm   # Left wheels backward (-150)
             else:
-                # Right trigger pressed - turn right
-                right_pwm = trigger_turn_pwm   # Right wheels forward
-                left_pwm = -trigger_turn_pwm   # Left wheels backward
+                # Right trigger pressed - turn right (right wheels slower/backward, left wheels faster/forward)
+                right_pwm = -trigger_turn_pwm  # Right wheels backward (-150)
+                left_pwm = trigger_turn_pwm    # Left wheels forward (150)
         else:
             # Normal stick control when no triggers pressed
             # Calculate base forward/backward movement from left stick Y
-            forward_pwm = -stick_y * max_pwm  # Invert Y axis
+            forward_pwm = -stick_y * max_pwm  # Invert Y axis (up = forward)
             
             # Calculate turning component from stick X
-            turn_pwm = -stick_x * max_pwm * 0.7  # Reduce turn sensitivity
+            # FIXED: When stick goes left (negative), we want to turn left
+            # Left turn = left wheels slower, right wheels faster
+            turn_pwm = stick_x * max_pwm * 0.7  # Remove negative sign to fix direction
             
-            # Calculate left and right motor PWM
+            # Calculate left and right motor PWM - FIXED LOGIC
+            # When stick_x is negative (left), turn_pwm is negative
+            # right_pwm gets MORE power (forward_pwm - negative = forward_pwm + positive)
+            # left_pwm gets LESS power (forward_pwm + negative = forward_pwm - positive)
             right_pwm = int(forward_pwm - turn_pwm)  # Right wheels
             left_pwm = int(forward_pwm + turn_pwm)   # Left wheels
             
@@ -165,14 +171,14 @@ class JoystickControllerNode(Node):
         self.last_command = command
     
     def handle_discrete_control(self, stick_x, stick_y, lt_value, rt_value):
-        """Handle discrete movement commands with trigger turning"""
+        """Handle discrete movement commands with trigger turning - FIXED DIRECTIONS"""
         command = ""
         
         # Check triggers first (higher priority)
         if lt_value > 0.5:
-            command = "TURN_LEFT"
+            command = "TURN,-90"  # Left trigger = turn left
         elif rt_value > 0.5:
-            command = "TURN_RIGHT"
+            command = "TURN,90"   # Right trigger = turn right
         # Then check stick inputs
         elif abs(stick_y) > 0.5:
             if stick_y < -0.5:  # Forward (stick up)
@@ -180,10 +186,10 @@ class JoystickControllerNode(Node):
             elif stick_y > 0.5:  # Backward (stick down)
                 command = "BACKWARD,1.0"
         elif abs(stick_x) > 0.5:
-            if stick_x < -0.5:  # Turn left
-                command = "TURN_LEFT"
-            elif stick_x > 0.5:  # Turn right
-                command = "TURN_RIGHT"
+            if stick_x < -0.5:  # Turn left (stick left)
+                command = "TURN,-90"
+            elif stick_x > 0.5:  # Turn right (stick right)
+                command = "TURN,90"
         else:
             # Stop if no significant input
             command = "STOP"

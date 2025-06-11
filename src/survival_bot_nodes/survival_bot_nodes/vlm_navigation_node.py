@@ -104,7 +104,7 @@ class VLMNavigationNode(Node):
         
         # Parameters
         self.declare_parameter('goal', 'Max Sunlight Location')
-        self.declare_parameter('max_iterations', 3.0)
+        self.declare_parameter('max_iterations', 10.0)
         self.declare_parameter('navigation_interval', 10.0)
         
         self.goal = self.get_parameter('goal').value

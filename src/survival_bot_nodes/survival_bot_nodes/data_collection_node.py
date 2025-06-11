@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Data Collection Node - Intelligent training data collection
-Collects 10 data points from VLM command start to robot stop, with more during turns
+Data Collection Node - Continuous training data collection with event detection
+Records at 10Hz continuously, 20Hz for 2 seconds when bumpers activate
 """
 
 import rclpy
@@ -30,10 +30,8 @@ class DataCollectionNode(Node):
         
         # Parameters
         self.declare_parameter('output_dir', './train/data')
-        self.declare_parameter('save_interval', 30.0)  # Save every 30 seconds
         
         self.output_dir = self.get_parameter('output_dir').value
-        self.save_interval = self.get_parameter('save_interval').value
         
         # Setup output directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -41,8 +39,11 @@ class DataCollectionNode(Node):
         os.makedirs(f"{self.session_dir}/images", exist_ok=True)
         os.makedirs(f"{self.session_dir}/data", exist_ok=True)
         
+        # Single CSV file for continuous data
+        self.csv_file_path = f"{self.session_dir}/data/continuous_data.csv"
+        self.csv_initialized = False
+        
         # Data storage
-        self.data_buffer = []
         self.data_counter = 0
         
         # Latest data
@@ -51,13 +52,19 @@ class DataCollectionNode(Node):
         self.latest_vlm_action = None
         self.latest_command = None
         
-        # Collection strategy - collect 10 points from command start to stop
-        self.collection_active = False
-        self.collection_start_time = None
-        self.target_collection_count = 10
-        self.current_collection_count = 0
+        # Recording frequencies
+        self.base_frequency = 10.0  # 10 Hz
+        self.rapid_frequency = 20.0  # 20 Hz for events
+        self.current_frequency = self.base_frequency
+        
+        # Bumper event detection
+        self.rapid_recording = False
+        self.rapid_start_time = None
+        self.rapid_duration = 2.0  # 2 seconds of rapid recording
+        self.last_bumper_state = {'top': 0, 'bottom': 0, 'left': 0, 'right': 0}
+        
+        # Motion tracking
         self.last_motion_state = "stop"
-        self.command_in_progress = False
         
         # ROS2 Subscriptions
         self.image_sub = self.create_subscription(
@@ -74,16 +81,15 @@ class DataCollectionNode(Node):
         # Publishers for VLM decisions (so VLM nodes can publish their decisions)
         self.vlm_decision_pub = self.create_publisher(String, 'vlm/decision', 10)
         
-        # Timer for intelligent data collection
-        self.collection_timer = self.create_timer(0.5, self.intelligent_collect_data)  # 2Hz collection rate
+        # Timer for continuous data collection (starts at 10Hz)
+        self.collection_timer = self.create_timer(1.0 / self.base_frequency, self.collect_data_continuous)
         
-        # Timer for saving data
-        self.save_timer = self.create_timer(self.save_interval, self.save_data_batch)
-        
-        self.get_logger().info("📊 Data Collection Node Started")
+        self.get_logger().info("📊 Continuous Data Collection Node Started")
         self.get_logger().info(f"   Output: {self.session_dir}")
-        self.get_logger().info(f"   Strategy: 10 points per VLM command (start to stop)")
+        self.get_logger().info(f"   Strategy: Continuous recording at {self.base_frequency}Hz")
+        self.get_logger().info(f"   Rapid mode: {self.rapid_frequency}Hz for {self.rapid_duration}s on bumper events")
         self.get_logger().info(f"   PyTorch: {'✅' if TORCH_AVAILABLE else '❌'}")
+        self.get_logger().info(f"   Single CSV: {self.csv_file_path}")
     
     def image_callback(self, msg):
         """Store latest camera image"""
@@ -96,266 +102,167 @@ class DataCollectionNode(Node):
             self.get_logger().error(f"Image decode failed: {e}")
     
     def sensor_callback(self, msg):
-        """Store latest sensor data and track motion state"""
+        """Store latest sensor data and detect bumper events"""
         try:
             self.latest_sensor_data = json.loads(msg.data)
             
             # Track motion state changes
             current_motion = self.latest_sensor_data.get('motion', 'stop')
-            
-            # Detect motion state transitions
             if self.last_motion_state != current_motion:
-                if current_motion == "moving" and self.last_motion_state == "stop":
-                    # Robot started moving - start collection if command was issued
-                    if self.command_in_progress:
-                        self.start_data_collection()
-                elif current_motion == "stop" and self.last_motion_state == "moving":
-                    # Robot stopped moving - end collection
-                    if self.collection_active:
-                        self.end_data_collection()
-                
                 self.last_motion_state = current_motion
+            
+            # Check for bumper events
+            current_bumpers = self.latest_sensor_data.get('bumpers', {})
+            bumper_activated = False
+            
+            for bumper in ['top', 'bottom', 'left', 'right']:
+                current_state = current_bumpers.get(bumper, 0)
+                last_state = self.last_bumper_state.get(bumper, 0)
+                
+                # Detect bumper activation (0 -> 1 transition)
+                if current_state == 1 and last_state == 0:
+                    bumper_activated = True
+                    self.get_logger().info(f"🚨 BUMPER EVENT: {bumper} bumper activated!")
+                    break
+            
+            # Update last bumper state
+            self.last_bumper_state = current_bumpers.copy()
+            
+            # Start rapid recording if bumper activated
+            if bumper_activated:
+                self.start_rapid_recording()
                 
         except Exception as e:
             self.get_logger().error(f"Sensor data parse failed: {e}")
     
     def command_callback(self, msg):
-        """Store latest robot command and initiate collection"""
+        """Store latest robot command"""
         self.latest_command = msg.data
-        
-        # Parse command to extract action information
-        try:
-            if msg.data.startswith("TURN"):
-                parts = msg.data.split(",")
-                angle = float(parts[1]) if len(parts) > 1 else 0.0
-                self.latest_random_action = {"type": "turn", "angle": angle, "distance": 0.0}
-                self.command_in_progress = True
-                # For turns, collect more data points
-                self.target_collection_count = 15
-                
-            elif msg.data.startswith("FORWARD"):
-                parts = msg.data.split(",")
-                distance = float(parts[1]) if len(parts) > 1 else 1.0
-                self.latest_random_action = {"type": "forward", "angle": 0.0, "distance": distance}
-                self.command_in_progress = True
-                self.target_collection_count = 10
-                
-            elif msg.data == "STOP":
-                self.latest_random_action = {"type": "stop", "angle": 0.0, "distance": 0.0}
-                self.command_in_progress = False
-                if self.collection_active:
-                    self.end_data_collection()
-                    
-        except Exception as e:
-            self.get_logger().error(f"Command parse failed: {e}")
     
     def vlm_decision_callback(self, msg):
         """Store latest VLM decision"""
         try:
             vlm_data = json.loads(msg.data)
             self.latest_vlm_action = vlm_data
-            # VLM decision indicates new command cycle
-            self.command_in_progress = True
         except Exception as e:
             self.get_logger().error(f"VLM decision parse failed: {e}")
     
-    def start_data_collection(self):
-        """Start intelligent data collection for this command cycle"""
-        if not self.collection_active:
-            self.collection_active = True
-            self.collection_start_time = time.time()
-            self.current_collection_count = 0
-            self.get_logger().info(f"📊 Started collecting {self.target_collection_count} data points")
+    def start_rapid_recording(self):
+        """Start rapid recording mode for bumper events"""
+        if not self.rapid_recording:
+            self.rapid_recording = True
+            self.rapid_start_time = time.time()
+            
+            # Switch to rapid frequency
+            self.current_frequency = self.rapid_frequency
+            self.collection_timer.cancel()
+            self.collection_timer = self.create_timer(1.0 / self.rapid_frequency, self.collect_data_continuous)
+            
+            self.get_logger().info(f"🚀 Started rapid recording at {self.rapid_frequency}Hz for {self.rapid_duration}s")
     
-    def end_data_collection(self):
-        """End data collection for this command cycle"""
-        if self.collection_active:
-            collection_duration = time.time() - self.collection_start_time
-            self.collection_active = False
-            self.command_in_progress = False
-            self.get_logger().info(f"📊 Collection complete: {self.current_collection_count}/{self.target_collection_count} points in {collection_duration:.2f}s")
-    
-    def intelligent_collect_data(self):
-        """Intelligent data collection - only when robot is active"""
-        # Only collect if:
-        # 1. Collection is active (command in progress)
-        # 2. Robot is moving OR we haven't reached target count
-        # 3. We have all required data
-        
-        if not self.collection_active:
-            return
-            
-        if (self.latest_image is not None and 
-            self.latest_sensor_data is not None):
-            
-            # Determine if we should collect this point
-            current_motion = self.latest_sensor_data.get('motion', 'stop')
-            should_collect = False
-            
-            if current_motion == "moving":
-                # Always collect when moving
-                should_collect = True
-            elif self.current_collection_count == 0:
-                # Always collect first point (command start)
-                should_collect = True
-            elif self.current_collection_count < self.target_collection_count and current_motion == "stop":
-                # Collect final point when stopped
-                should_collect = True
+    def check_rapid_recording_timeout(self):
+        """Check if rapid recording should end"""
+        if self.rapid_recording and self.rapid_start_time is not None:
+            elapsed_time = time.time() - self.rapid_start_time
+            if elapsed_time >= self.rapid_duration:
+                # End rapid recording
+                self.rapid_recording = False
+                self.current_frequency = self.base_frequency
                 
-            if should_collect and self.current_collection_count < self.target_collection_count:
-                try:
-                    # Save image
-                    timestamp = datetime.now()
-                    timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
-                    image_filename = f"img_{self.data_counter:06d}_{timestamp_str}.jpg"
-                    image_path = f"{self.session_dir}/images/{image_filename}"
-                    cv2.imwrite(image_path, self.latest_image)
-                    
-                    # Categorize motion state
-                    motion_category = "moving" if current_motion == "moving" else "stationary"
-                    
-                    # Prepare data point
-                    data_point = {
-                        'timestamp': timestamp.isoformat(),
-                        'data_id': self.data_counter,
-                        'collection_point': self.current_collection_count + 1,
-                        'target_points': self.target_collection_count,
-                        'image_path': image_path,
-                        'image_filename': image_filename,
-                        'image_shape': self.latest_image.shape,
-                        'sensor_data': self.latest_sensor_data.copy(),
-                        'vlm_action': self.latest_vlm_action.copy() if self.latest_vlm_action else None,
-                        'random_action': getattr(self, 'latest_random_action', None),
-                        'latest_command': self.latest_command,
-                        'motion_state': motion_category,  # Categorical: moving/stationary
-                        'raw_motion': current_motion,     # Raw Arduino motion string
-                    }
-                    
-                    # Convert image to tensor format for neural network
-                    if TORCH_AVAILABLE:
-                        # Normalize image to [0,1] and convert to CHW format
-                        image_tensor = torch.from_numpy(self.latest_image).float() / 255.0
-                        image_tensor = image_tensor.permute(2, 0, 1)  # HWC to CHW
-                        data_point['image_tensor_shape'] = image_tensor.shape
-                    else:
-                        # Store as numpy array
-                        data_point['image_array'] = self.latest_image.copy()
-                    
-                    self.data_buffer.append(data_point)
-                    self.data_counter += 1
-                    self.current_collection_count += 1
-                    
-                    self.get_logger().info(f"📊 Collected point {self.current_collection_count}/{self.target_collection_count} ({motion_category})")
-                    
-                    # End collection if we've reached target
-                    if self.current_collection_count >= self.target_collection_count:
-                        self.end_data_collection()
-                    
-                except Exception as e:
-                    self.get_logger().error(f"Data collection failed: {e}")
+                # Switch back to base frequency
+                self.collection_timer.cancel()
+                self.collection_timer = self.create_timer(1.0 / self.base_frequency, self.collect_data_continuous)
+                
+                self.get_logger().info(f"📊 Returned to normal recording at {self.base_frequency}Hz")
     
-    def save_data_batch(self):
-        """Save collected data to disk"""
-        if not self.data_buffer:
+    def collect_data_continuous(self):
+        """Continuous data collection at current frequency"""
+        # Check if rapid recording should timeout
+        self.check_rapid_recording_timeout()
+        
+        # Only collect if we have both image and sensor data
+        if self.latest_image is None or self.latest_sensor_data is None:
             return
         
         try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Save image
+            timestamp = datetime.now()
+            timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
+            image_filename = f"img_{self.data_counter:06d}_{timestamp_str}.jpg"
+            image_path = f"{self.session_dir}/images/{image_filename}"
+            cv2.imwrite(image_path, self.latest_image)
             
-            # Create DataFrame
-            df_data = []
-            for data_point in self.data_buffer:
-                # Flatten sensor data
-                sensor_flat = self.flatten_dict(data_point['sensor_data'], 'sensor_')
+            # Determine motion state and collection type
+            current_motion = self.latest_sensor_data.get('motion', 'stop')
+            motion_category = "moving" if current_motion == "moving" else "stationary"
+            
+            # Determine collection type
+            if self.rapid_recording:
+                collection_type = "rapid_event"
+            else:
+                collection_type = "continuous"
+            
+            # Check if any bumper is currently activated
+            bumpers = self.latest_sensor_data.get('bumpers', {})
+            bumper_active = any(bumpers.get(b, 0) == 1 for b in ['top', 'bottom', 'left', 'right'])
+            
+            # Prepare CLEAN data point (only essential fields)
+            data_point = {
+                'timestamp': timestamp.isoformat(),
+                'data_id': self.data_counter,
+                'image_filename': image_filename,
+                'motion_state': motion_category,  # Categorical: moving/stationary
+                'collection_type': collection_type,  # continuous/rapid_event
+                'recording_frequency': self.current_frequency,
+                'bumper_event_active': bumper_active,  # Boolean flag for current bumper state
                 
-                # Flatten VLM action
-                vlm_flat = self.flatten_dict(data_point['vlm_action'], 'vlm_') if data_point['vlm_action'] else {}
-                
-                # Flatten random action
-                random_flat = self.flatten_dict(data_point['random_action'], 'random_') if data_point['random_action'] else {}
-                
-                # Combine all data
-                row = {
-                    'timestamp': data_point['timestamp'],
-                    'data_id': data_point['data_id'],
-                    'collection_point': data_point['collection_point'],
-                    'target_points': data_point['target_points'],
-                    'image_filename': data_point['image_filename'],
-                    'image_height': data_point['image_shape'][0],
-                    'image_width': data_point['image_shape'][1],
-                    'image_channels': data_point['image_shape'][2],
-                    'latest_command': data_point['latest_command'],
-                    'motion_state': data_point['motion_state'],      # Categorical
-                    'raw_motion': data_point['raw_motion'],          # Raw string
-                }
-                
-                row.update(sensor_flat)
-                row.update(vlm_flat)
-                row.update(random_flat)
-                
-                df_data.append(row)
+                # Essential sensor data only
+                'sensor_imu_roll': self.latest_sensor_data.get('imu', {}).get('roll', 0.0),
+                'sensor_imu_pitch': self.latest_sensor_data.get('imu', {}).get('pitch', 0.0),
+                'sensor_imu_yaw': self.latest_sensor_data.get('imu', {}).get('yaw', 0.0),
+                'sensor_encoders_left': self.latest_sensor_data.get('encoders', {}).get('left', 0),
+                'sensor_encoders_right': self.latest_sensor_data.get('encoders', {}).get('right', 0),
+                'sensor_current': self.latest_sensor_data.get('current', 0.0),
+                'sensor_ldr_left': self.latest_sensor_data.get('ldr', {}).get('left', 512),
+                'sensor_ldr_right': self.latest_sensor_data.get('ldr', {}).get('right', 512),
+                'sensor_environment_temperature': self.latest_sensor_data.get('environment', {}).get('temperature', 25.0),
+                'sensor_environment_humidity': self.latest_sensor_data.get('environment', {}).get('humidity', 50.0),
+                'sensor_environment_pressure': self.latest_sensor_data.get('environment', {}).get('pressure', 1013.25),
+                'sensor_bumpers_top': self.latest_sensor_data.get('bumpers', {}).get('top', 0),
+                'sensor_bumpers_bottom': self.latest_sensor_data.get('bumpers', {}).get('bottom', 0),
+                'sensor_bumpers_left': self.latest_sensor_data.get('bumpers', {}).get('left', 0),
+                'sensor_bumpers_right': self.latest_sensor_data.get('bumpers', {}).get('right', 0),
+            }
             
-            # Create DataFrame
-            df = pd.DataFrame(df_data)
+            # Save to continuous CSV file
+            self.save_to_csv(data_point)
             
-            # Save DataFrame
-            csv_path = f"{self.session_dir}/data/batch_{timestamp}.csv"
-            df.to_csv(csv_path, index=False)
+            self.data_counter += 1
             
-            # Save as pickle for faster loading
-            pickle_path = f"{self.session_dir}/data/batch_{timestamp}.pkl"
-            df.to_pickle(pickle_path)
-            
-            # If PyTorch available, save as tensor dataset
-            if TORCH_AVAILABLE:
-                torch_path = f"{self.session_dir}/data/batch_{timestamp}.pt"
-                # Create tensor dataset (simplified - just save the DataFrame)
-                torch.save({
-                    'dataframe': df,
-                    'metadata': {
-                        'session_dir': self.session_dir,
-                        'collection_time': timestamp,
-                        'num_samples': len(df),
-                        'image_format': 'jpg',
-                        'tensor_ready': True,
-                        'collection_strategy': 'intelligent_10_point'
-                    }
-                }, torch_path)
-            
-            # Count motion states
-            motion_counts = df['motion_state'].value_counts().to_dict()
-            collection_points = len(df['collection_point'].unique()) if 'collection_point' in df.columns else 0
-            
-            self.get_logger().info(f"💾 Saved {len(self.data_buffer)} samples:")
-            self.get_logger().info(f"   Motion states: {motion_counts}")
-            self.get_logger().info(f"   Collection cycles: {collection_points}")
-            self.get_logger().info(f"   CSV: {csv_path}")
-            self.get_logger().info(f"   Pickle: {pickle_path}")
-            if TORCH_AVAILABLE:
-                self.get_logger().info(f"   PyTorch: {torch_path}")
-            
-            # Clear buffer
-            self.data_buffer.clear()
+            # Log periodically (every 50 samples to avoid spam)
+            if self.data_counter % 50 == 0:
+                mode = "RAPID" if self.rapid_recording else "NORMAL"
+                self.get_logger().info(f"📊 Collected {self.data_counter} samples [{mode} {self.current_frequency}Hz] ({motion_category})")
             
         except Exception as e:
-            self.get_logger().error(f"Data save failed: {e}")
+            self.get_logger().error(f"Data collection failed: {e}")
     
-    def flatten_dict(self, d, prefix=''):
-        """Flatten nested dictionary for DataFrame"""
-        if not d:
-            return {}
-        
-        flattened = {}
-        for key, value in d.items():
-            new_key = f"{prefix}{key}"
-            if isinstance(value, dict):
-                flattened.update(self.flatten_dict(value, f"{new_key}_"))
-            elif isinstance(value, (list, tuple)):
-                for i, item in enumerate(value):
-                    flattened[f"{new_key}_{i}"] = item
+    def save_to_csv(self, data_point):
+        """Save single data point to continuous CSV file"""
+        try:
+            df = pd.DataFrame([data_point])
+            
+            # Initialize CSV file with headers if first time
+            if not self.csv_initialized:
+                df.to_csv(self.csv_file_path, mode='w', header=True, index=False)
+                self.csv_initialized = True
+                self.get_logger().info(f"📁 Initialized CSV file: {self.csv_file_path}")
             else:
-                flattened[new_key] = value
-        return flattened
+                # Append to existing file
+                df.to_csv(self.csv_file_path, mode='a', header=False, index=False)
+            
+        except Exception as e:
+            self.get_logger().error(f"CSV save failed: {e}")
     
     def publish_vlm_decision(self, action, distance=None, reasoning=""):
         """Helper method for VLM nodes to publish their decisions"""
@@ -370,6 +277,63 @@ class DataCollectionNode(Node):
         msg.data = json.dumps(decision_data)
         self.vlm_decision_pub.publish(msg)
 
+    def save_final_summary(self):
+        """Save final summary and backup files on shutdown"""
+        try:
+            if not os.path.exists(self.csv_file_path):
+                return
+                
+            # Load the full dataset
+            df = pd.read_csv(self.csv_file_path)
+            
+            # Create summary statistics
+            summary = {
+                'total_samples': len(df),
+                'session_duration': (pd.to_datetime(df['timestamp'].iloc[-1]) - pd.to_datetime(df['timestamp'].iloc[0])).total_seconds(),
+                'motion_states': df['motion_state'].value_counts().to_dict(),
+                'collection_types': df['collection_type'].value_counts().to_dict(),
+                'bumper_events': df['bumper_event_active'].sum(),
+                'rapid_recordings': len(df[df['collection_type'] == 'rapid_event']),
+                'frequencies_used': df['recording_frequency'].value_counts().to_dict(),
+            }
+            
+            # Save summary
+            summary_path = f"{self.session_dir}/data/session_summary.json"
+            with open(summary_path, 'w') as f:
+                json.dump(summary, f, indent=2)
+            
+            # Save backup as pickle
+            pickle_path = f"{self.session_dir}/data/continuous_data.pkl"
+            df.to_pickle(pickle_path)
+            
+            # Save as PyTorch if available
+            if TORCH_AVAILABLE:
+                torch_path = f"{self.session_dir}/data/continuous_data.pt"
+                torch.save({
+                    'dataframe': df,
+                    'summary': summary,
+                    'metadata': {
+                        'session_dir': self.session_dir,
+                        'collection_strategy': 'continuous_with_event_detection',
+                        'base_frequency': self.base_frequency,
+                        'rapid_frequency': self.rapid_frequency,
+                        'rapid_duration': self.rapid_duration,
+                        'tensor_ready': True
+                    }
+                }, torch_path)
+            
+            self.get_logger().info(f"💾 Final save complete:")
+            self.get_logger().info(f"   Total samples: {summary['total_samples']}")
+            self.get_logger().info(f"   Duration: {summary['session_duration']:.1f}s")
+            self.get_logger().info(f"   Motion states: {summary['motion_states']}")
+            self.get_logger().info(f"   Bumper events: {summary['bumper_events']}")
+            self.get_logger().info(f"   Rapid recordings: {summary['rapid_recordings']}")
+            self.get_logger().info(f"   CSV: {self.csv_file_path}")
+            self.get_logger().info(f"   Summary: {summary_path}")
+            
+        except Exception as e:
+            self.get_logger().error(f"Final save failed: {e}")
+
 def main(args=None):
     rclpy.init(args=args)
     
@@ -379,10 +343,8 @@ def main(args=None):
         rclpy.spin(node)
     except KeyboardInterrupt:
         print("\n🛑 Data Collection stopped")
-        # Save any remaining data
-        if node.data_buffer:
-            node.save_data_batch()
-            print(f"💾 Final save: {len(node.data_buffer)} samples")
+        # Save final summary and backup
+        node.save_final_summary()
     finally:
         if hasattr(node, 'destroy_node'):
             node.destroy_node()

@@ -24,19 +24,11 @@ def generate_launch_description():
             name='vlm_navigation_random_node',
             output='screen',
             parameters=[{
-                'goal': 'Explore and find interesting objects',
-                'max_iterations': 5.0,
+                'goal': 'Max Sunlight Location',
+                'max_iterations': 10,
                 'navigation_interval': 8.0,
                 'random_movements': True,
                 'use_fake_data': False
             }]
-        ),
-        
-        # Camera Viewer
-        Node(
-            package='survival_bot_nodes', 
-            executable='camera_viewer_node.py',
-            name='camera_viewer_node',
-            output='screen'
         )
     ]) 
