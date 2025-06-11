@@ -128,20 +128,20 @@ class JoystickControllerNode(Node):
         if lt_value > 0 or rt_value > 0:
             # Pure trigger turning - ignore stick inputs
             if lt_value > rt_value:
-                # Left trigger pressed - turn left
-                left_pwm = -trigger_turn_pwm  # -150
-                right_pwm = trigger_turn_pwm  # +150
-            else:
-                # Right trigger pressed - turn right  
+                # Left trigger pressed - turn left (FIXED: swapped values)
                 left_pwm = trigger_turn_pwm   # +150
                 right_pwm = -trigger_turn_pwm # -150
+            else:
+                # Right trigger pressed - turn right (FIXED: swapped values)
+                left_pwm = -trigger_turn_pwm  # -150
+                right_pwm = trigger_turn_pwm  # +150
         else:
             # Normal stick control when no triggers pressed
             # Calculate base forward/backward movement from left stick Y
             forward_pwm = -stick_y * max_pwm  # Invert Y axis
             
-            # Calculate turning component from stick X
-            turn_pwm = stick_x * max_pwm * 0.7  # Reduce turn sensitivity
+            # Calculate turning component from stick X (FIXED: flipped for correct turning)
+            turn_pwm = -stick_x * max_pwm * 0.7  # Flipped sign and reduce turn sensitivity
             
             # Calculate left and right motor PWM
             left_pwm = int(forward_pwm + turn_pwm)

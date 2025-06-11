@@ -11,13 +11,27 @@ import serial
 import glob
 from std_msgs.msg import String
 
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+
+try:
+    from sensor_msgs.msg import CompressedImage
+    COMPRESSED_IMAGE_AVAILABLE = True
+except ImportError:
+    COMPRESSED_IMAGE_AVAILABLE = False
+
 class DataServerNode(Node):
     def __init__(self):
         super().__init__('data_server_node')
         
         # Parameters
         self.declare_parameter('enable_arduino', True)
+        self.declare_parameter('enable_camera', True)
         self.enable_arduino = self.get_parameter('enable_arduino').value
+        self.enable_camera = self.get_parameter('enable_camera').value
         
         # Setup Arduino connection
         self.arduino = None
@@ -27,9 +41,17 @@ class DataServerNode(Node):
         if self.enable_arduino:
             self.setup_arduino()
         
+        # Setup camera
+        self.camera = None
+        if self.enable_camera and CV2_AVAILABLE and COMPRESSED_IMAGE_AVAILABLE:
+            self.setup_camera()
+        
         # Publishers
         self.sensor_pub = self.create_publisher(String, 'robot/sensor_data', 10)
         self.status_pub = self.create_publisher(String, 'robot/status', 10)
+        
+        if self.camera is not None:
+            self.camera_pub = self.create_publisher(CompressedImage, 'robot/camera/compressed', 10)
         
         # Subscribers
         self.command_sub = self.create_subscription(
@@ -38,10 +60,57 @@ class DataServerNode(Node):
         # Timers
         self.create_timer(0.05, self.read_arduino_data)   # 20Hz Arduino reading
         
+        if self.camera is not None:
+            self.create_timer(0.1, self.capture_camera)   # 10Hz camera capture
+        
         self.get_logger().info("📡 Data Server Node Started")
         self.get_logger().info(f"   Arduino: {'✅' if self.arduino else '❌'}")
+        self.get_logger().info(f"   Camera: {'✅' if self.camera else '❌'}")
         if self.arduino:
-            self.get_logger().info(f"   Port: {self.arduino.port}")
+            self.get_logger().info(f"   Arduino Port: {self.arduino.port}")
+    
+    def setup_camera(self):
+        """Initialize camera"""
+        try:
+            self.camera = cv2.VideoCapture(0)
+            if not self.camera.isOpened():
+                self.camera = cv2.VideoCapture(1)
+            
+            if self.camera.isOpened():
+                self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                self.camera.set(cv2.CAP_PROP_FPS, 10)
+                self.get_logger().info("✅ Camera initialized")
+            else:
+                self.camera = None
+                self.get_logger().warning("⚠️ No camera detected")
+                
+        except Exception as e:
+            self.get_logger().error(f"❌ Camera failed: {e}")
+            self.camera = None
+    
+    def capture_camera(self):
+        """Capture and publish camera images"""
+        if self.camera is None:
+            return
+            
+        try:
+            ret, frame = self.camera.read()
+            if ret:
+                # Compress image
+                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+                _, buffer = cv2.imencode('.jpg', frame, encode_param)
+                
+                # Create compressed image message
+                img_msg = CompressedImage()
+                img_msg.header.stamp = self.get_clock().now().to_msg()
+                img_msg.format = "jpeg"
+                img_msg.data = buffer.tobytes()
+                
+                self.camera_pub.publish(img_msg)
+                
+        except Exception as e:
+            self.get_logger().warning(f"Camera capture failed: {e}")
         
     def find_arduino_port(self):
         """Auto-detect Arduino serial port"""
