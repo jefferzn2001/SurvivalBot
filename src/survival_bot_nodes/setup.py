@@ -25,6 +25,8 @@ setup(
         'console_scripts': [
             'data_server_node = survival_bot_nodes.data_server_node:main',
             'vlm_navigation_node = survival_bot_nodes.vlm_navigation_node:main',
+            'vlm_navigation_random_node = survival_bot_nodes.vlm_navigation_random_node:main',
+            'data_collection_node = survival_bot_nodes.data_collection_node:main',
             'joystick_controller_node = survival_bot_nodes.joystick_controller_node:main',
             'camera_viewer_node = survival_bot_nodes.camera_viewer_node:main',
         ],

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VLM Navigation Node - Real VLM navigation with timing
+VLM Navigation Random Node - VLM navigation with random distance variation
 """
 
 import rclpy
@@ -94,9 +94,9 @@ def parse_action(response):
         print(f"Error parsing action: {e}")
     return -1
 
-class VLMNavigationNode(Node):
+class VLMNavigationRandomNode(Node):
     def __init__(self):
-        super().__init__('vlm_navigation_node')
+        super().__init__('vlm_navigation_random_node')
         
         if not VLM_READY:
             self.get_logger().error("❌ VLM not ready! Check VLMNAV setup and API key")
@@ -104,7 +104,7 @@ class VLMNavigationNode(Node):
         
         # Parameters
         self.declare_parameter('goal', 'Max Sunlight Location')
-        self.declare_parameter('max_iterations', 10.0)
+        self.declare_parameter('max_iterations', 10)  # Changed to 10
         self.declare_parameter('navigation_interval', 10.0)
         
         self.goal = self.get_parameter('goal').value
@@ -117,7 +117,7 @@ class VLMNavigationNode(Node):
         
         # Setup directories
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.session_dir = f"./vlm_session_{timestamp}"
+        self.session_dir = f"./vlm_random_session_{timestamp}"
         os.makedirs(f"{self.session_dir}/images", exist_ok=True)
         os.makedirs(f"{self.session_dir}/annotated", exist_ok=True)
         
@@ -125,6 +125,9 @@ class VLMNavigationNode(Node):
         self.image_sub = self.create_subscription(
             CompressedImage, 'robot/camera/compressed', self.image_callback, 10)
         self.command_pub = self.create_publisher(String, 'robot/command', 10)
+        
+        # VLM decision publisher for data collection
+        self.vlm_decision_pub = self.create_publisher(String, 'vlm/decision', 10)
         
         # Status subscription for real robot feedback
         self.status_sub = self.create_subscription(
@@ -134,17 +137,17 @@ class VLMNavigationNode(Node):
         
         # Action mapping
         self.actions = {
-            1: {"angle": -60, "desc": "Turn left 60° then forward 1m"},
-            2: {"angle": -35, "desc": "Turn left 35° then forward 1m"},
-            3: {"angle": 0, "desc": "Move straight forward 1m"},
-            4: {"angle": 35, "desc": "Turn right 35° then forward 1m"},
-            5: {"angle": 60, "desc": "Turn right 60° then forward 1m"}
+            1: {"angle": -60, "desc": "Turn left 60° then forward with random distance"},
+            2: {"angle": -35, "desc": "Turn left 35° then forward with random distance"},
+            3: {"angle": 0, "desc": "Move straight forward with random distance"},
+            4: {"angle": 35, "desc": "Turn right 35° then forward with random distance"},
+            5: {"angle": 60, "desc": "Turn right 60° then forward with random distance"}
         }
         
         # Start navigation
         self.navigation_timer = self.create_timer(self.navigation_interval, self.navigation_cycle)
         
-        self.get_logger().info("🧠 VLM Navigation Node Started")
+        self.get_logger().info("🎲 VLM Random Navigation Node Started")
         self.get_logger().info(f"   Goal: {self.goal}")
         self.get_logger().info(f"   Max cycles: {self.max_iterations}")
         self.get_logger().info(f"   Session: {self.session_dir}")
@@ -169,7 +172,7 @@ class VLMNavigationNode(Node):
             return
         
         self.get_logger().info(f"\n{'='*50}")
-        self.get_logger().info(f"🧭 VLM CYCLE #{self.cycle_count}/{self.max_iterations}")
+        self.get_logger().info(f"🎲 VLM RANDOM CYCLE #{self.cycle_count}/{self.max_iterations}")
         self.get_logger().info(f"{'='*50}")
         
         if self.latest_image is None:
@@ -208,15 +211,19 @@ class VLMNavigationNode(Node):
                 self.get_logger().warning(f"⚠️ Invalid action {action}, using 3")
                 action = 3
             
+            # Generate random distance (1 + 0-3 meters)
+            random_distance = 1.0 + np.random.uniform(0, 3)
+            
             # Log results
             action_desc = self.actions[action]["desc"]
             self.get_logger().info(f"🧠 VLM DECISION: Action {action} - {action_desc}")
+            self.get_logger().info(f"🎲 RANDOM DISTANCE: {random_distance:.2f}m")
             self.get_logger().info(f"⏱️ VLM Response Time: {vlm_time:.2f} seconds")
             self.get_logger().info(f"📝 VLM Reasoning: {response.text[:100]}...")
             
             # Execute action
             execute_start = time.time()
-            self.execute_action(action)
+            self.execute_action(action, random_distance)
             execute_time = time.time() - execute_start
             
             # Summary
@@ -233,19 +240,35 @@ class VLMNavigationNode(Node):
                 f.write(f"Time: {datetime.now()}\n")
                 f.write(f"VLM Response Time: {vlm_time:.2f}s\n")
                 f.write(f"Action: {action} - {action_desc}\n")
+                f.write(f"Random Distance: {random_distance:.2f}m\n")
                 f.write(f"Response: {response.text[:200]}...\n")
                 f.write("-" * 40 + "\n")
                 
+            # Publish VLM decision
+            vlm_decision_data = {
+                'cycle': self.cycle_count,
+                'action': action,
+                'description': action_desc,
+                'random_distance': random_distance,
+                'angle': self.actions[action]["angle"],
+                'vlm_response_time': vlm_time,
+                'reasoning': response.text[:200],
+                'timestamp': datetime.now().isoformat()
+            }
+            vlm_decision_msg = String()
+            vlm_decision_msg.data = json.dumps(vlm_decision_data)
+            self.vlm_decision_pub.publish(vlm_decision_msg)
+            
         except Exception as e:
             self.get_logger().error(f"❌ Navigation cycle failed: {e}")
     
-    def execute_action(self, action):
-        """Execute VLM action"""
+    def execute_action(self, action, random_distance):
+        """Execute VLM action with random distance"""
         try:
             angle = self.actions[action]["angle"]
             desc = self.actions[action]["desc"]
             
-            self.get_logger().info(f"🚀 EXECUTING: {desc}")
+            self.get_logger().info(f"🚀 EXECUTING: {desc} ({random_distance:.2f}m)")
             
             # Turn if needed
             if angle != 0:
@@ -254,10 +277,10 @@ class VLMNavigationNode(Node):
                 self.get_logger().info(f"   🔄 Turning {angle}°...")
                 self.wait_for_completion(turn_cmd)
             
-            # Move forward 1 meter (changed from 2.0)
-            forward_cmd = "FORWARD,1.0"
+            # Move forward with random distance
+            forward_cmd = f"FORWARD,{random_distance:.2f}"
             self.send_command(forward_cmd)
-            self.get_logger().info(f"   ⬆️ Moving forward 1m...")
+            self.get_logger().info(f"   ⬆️ Moving forward {random_distance:.2f}m...")
             self.wait_for_completion(forward_cmd)
             
             # Stop
@@ -265,7 +288,7 @@ class VLMNavigationNode(Node):
             self.send_command(stop_cmd)
             self.wait_for_completion(stop_cmd)
             
-            self.get_logger().info(f"✅ Action {action} completed")
+            self.get_logger().info(f"✅ Action {action} completed with {random_distance:.2f}m")
             
         except Exception as e:
             self.get_logger().error(f"❌ Execution failed: {e}")
@@ -309,17 +332,17 @@ def main(args=None):
     rclpy.init(args=args)
     
     if not VLM_READY:
-        print("❌ Cannot start VLM Navigation:")
+        print("❌ Cannot start VLM Random Navigation:")
         print("   - Check VLMNAV folder exists")
         print("   - Check .env file with API_KEY")
         return
     
-    node = VLMNavigationNode()
+    node = VLMNavigationRandomNode()
     
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        print("\n🛑 VLM Navigation stopped")
+        print("\n🛑 VLM Random Navigation stopped")
     finally:
         if hasattr(node, 'destroy_node'):
             node.destroy_node()

@@ -1,207 +1,230 @@
-# SurvivalBot VLM Navigation
+# SurvivalBot VLM Navigation & Neural Network Training
 
-This repository contains a ROS2-based system for Vision Language Model (VLM) navigation. It is structured for a two-computer setup: a development machine for VLM processing and a Raspberry Pi for robot control.
+This repository contains a ROS2-based system for Vision Language Model (VLM) navigation with neural network training capabilities. It's structured for a two-computer setup: a development machine for VLM processing and a Raspberry Pi for robot control.
 
-**This guide provides the definitive, script-free method for setting up and running the project.**
+**This guide provides the complete, definitive method for setup, usage, and neural network training.**
+
+---
+
+## 🚀 How to Use Tomorrow (Quick Start)
+
+### 1. **Activate Environment & Source Workspace**
+```bash
+cd ~/SurvivalBot
+conda activate survival_bot
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+```
+
+### 2. **Run Standard VLM Navigation (3 cycles)**
+```bash
+# Terminal 1 (Pi): Data server
+ros2 launch survival_bot_nodes data_server.launch.py
+
+# Terminal 2 (Dev): VLM navigation
+ros2 launch survival_bot_nodes vlm_navigation.launch.py
+```
+
+### 3. **Run Random VLM + Data Collection (10 cycles)**
+```bash
+# Single command runs all 3 nodes together
+ros2 launch survival_bot_nodes vlm_navigation_random.launch.py
+```
+
+### 4. **Train Neural Network**
+```bash
+cd train
+python train.py
+```
 
 ---
 
 ##  Git Workflow: Pushing Your Code
 
-After you make changes, here is how you push them to your GitHub repository.
+After you make changes, here's exactly how to push them:
 
-1.  **Check Status:** See what files you have changed.
-    ```bash
-    git status
-    ```
+```bash
+# 1. Check what files changed
+git status
 
-2.  **Add Files:** Add all changed files to the staging area.
-    ```bash
-    git add .
-    ```
+# 2. Add all changed files
+git add .
 
-3.  **Commit Changes:** Create a snapshot of your changes with a descriptive message.
-    ```bash
-    git commit -m "Your descriptive message here, e.g., Implement VLM action parsing"
-    ```
+# 3. Commit with descriptive message
+git commit -m "Add neural network training and data collection nodes"
 
-4.  **Push to GitHub:** Upload your committed changes.
-    ```bash
-    git push origin main
-    ```
+# 4. Push to GitHub
+git push origin main
+```
+
+**If you get authentication errors:**
+```bash
+# Check remote URL (should be SSH format)
+git remote -v
+
+# If it shows HTTPS, change to SSH:
+git remote set-url origin git@github.com:jefferzn2001/SurvivalBot.git
+```
 
 ---
 
-## Setup & Installation
+## 🏗️ System Architecture & Data Flow
 
-Follow these steps on each machine.
-
-### A. Dev Machine Setup (for VLM Processing)
-
-1.  **Clone the Repository:**
-    ```bash
-    # Using SSH (recommended)
-    git clone git@github.com:jefferzn2001/SurvivalBot.git SurvivalBot
-    cd SurvivalBot
-    ```
-
-2.  **Create Python 3.10 Conda Environment:** Create an environment with Python 3.10 to match ROS2 Humble.
-    ```bash
-    # Create conda environment with Python 3.10 (matches ROS2 Humble)
-    conda create -n survival_bot python=3.10 -y
-    conda activate survival_bot
-    ```
-
-3.  **Install Python Dependencies:**
-    ```bash
-    pip install -r requirements-dev.txt
-    ```
-
-4.  **Source ROS2 & Build:**
-    ```bash
-    # Source ROS2 (system installation)
-    source /opt/ros/humble/setup.bash
-    
-    # Build with conda environment active
-    colcon build --packages-select survival_bot_nodes
-    ```
-
-5.  **Set Up Gemini API Key:** Create a `.env` file for your API key.
-    ```bash
-    echo "API_KEY=your_actual_api_key_here" > src/survival_bot_nodes/VLMNAV/.env
-    ```
-
-### B. Raspberry Pi Setup (for Robot Control)
-
-1.  **Clone or Pull Your Latest Code:**
-    ```bash
-    # If first time:
-    git clone git@github.com:jefferzn2001/SurvivalBot.git SurvivalBot
-    cd SurvivalBot
-    
-    # If updating existing installation:
-    cd ~/SurvivalBot
-    git pull origin main
-    ```
-
-2.  **Install Dependencies (No Conda Needed):**
-    ```bash
-    pip install -r requirements-pi.txt
-    ```
-
-3.  **Source ROS2 & Build:**
-    ```bash
-    source /opt/ros/humble/setup.bash
-    colcon build --packages-select survival_bot_nodes
-    
-    # Fix package structure (run once after building)
-    mkdir -p install/survival_bot_nodes/lib/survival_bot_nodes
-    cp install/survival_bot_nodes/bin/* install/survival_bot_nodes/lib/survival_bot_nodes/
-    cp -r src/survival_bot_nodes/VLMNAV install/survival_bot_nodes/lib/python3.10/site-packages/
-    ```
+```
+Dev Machine                    Pi                 Training Pipeline
+┌─────────────────────┐       ┌─────────────┐    ┌─────────────────┐
+│ VLM Navigation      │ ROS2  │ Data Server │    │ Neural Network  │
+│ - Gemini API        │ ←───→ │ - Camera    │    │ - CNN for RGB   │
+│ - Random Distance   │ WiFi  │ - Sensors   │    │ - Policy Learn  │
+│ - Data Collection   │       │ - Commands  │    │ - SOC Predict   │
+└─────────────────────┘       └─────────────┘    └─────────────────┘
+         │                                                 ▲
+         └─────────── Training Data ────────────────────────┘
+```
 
 ---
 
-## Running & Testing the VLM System
+## 🤖 Available Nodes & How They Work
 
-**Important:** Always use system Python (not conda) for ROS2 operations to avoid library conflicts.
+### **1. data_server_node** (Runs on Pi)
+- **Purpose**: Provides camera feed and sensor data
+- **What it does**:
+  - Captures camera images at 10Hz (640x480)
+  - Generates mock sensor data (IMU, encoders, battery)
+  - Receives and executes robot commands
+  - Publishes status confirmations
+- **Topics**:
+  - Publishes: `robot/camera/compressed`, `robot/sensor_data`, `robot/status`
+  - Subscribes: `robot/command`
 
-### 1. Source The Workspace
+### **2. vlm_navigation_node** (Runs on Dev Machine)
+- **Purpose**: Standard VLM navigation (3 cycles, 1m distance)
+- **What it does**:
+  - Gets camera images every 10 seconds
+  - Annotates images with bounding boxes
+  - Sends to Gemini API for decision making
+  - Executes turn + 1m forward movement
+  - Saves session data and VLM reasoning
+- **Stops after**: 3 cycles
 
-**This is required in every new terminal.**
-```bash
-cd ~/SurvivalBot
-source /opt/ros/humble/setup.bash
-source install/setup.bash
+### **3. vlm_navigation_random_node** (Runs on Dev Machine) 
+- **Purpose**: VLM navigation with random distance variation (10 cycles)
+- **What it does**:
+  - Same as standard VLM but with random distance: **1 + (0-3) meters**
+  - Records the random distance for each action
+  - Publishes VLM decisions to `vlm/decision` topic
+  - Runs for 10 cycles instead of 3
+- **Key difference**: Distance varies from 1.0m to 4.0m randomly
+
+### **4. data_collection_node** (Runs on Dev Machine)
+- **Purpose**: Collects neural network training data
+- **What it does**:
+  - Subscribes to camera, sensors, commands, and VLM decisions
+  - Saves images to `train/data/session_YYYYMMDD_HHMMSS/images/`
+  - Creates training datasets in CSV, Pickle, and PyTorch formats
+  - Auto-saves every 30 seconds to prevent data loss
+  - Prepares data for neural network consumption
+
+### **5. joystick_controller_node** (Manual Control)
+- **Purpose**: Manual robot control with gamepad
+- **Usage**: `ros2 run survival_bot_nodes joystick_controller_node`
+
+### **6. camera_viewer_node** (Debugging)
+- **Purpose**: Display camera feed in real-time
+- **Usage**: `ros2 run survival_bot_nodes camera_viewer_node`
+
+---
+
+## 📊 Neural Network Training System
+
+### **Training Data Location**
+All training data is stored in:
+```
+train/data/
+├── session_20241210_143022/          # Session directory  
+│   ├── images/                        # RGB images (640x480x3)
+│   │   ├── img_000001_timestamp.jpg   # Individual frames
+│   │   └── ...
+│   └── data/                          # Training datasets
+│       ├── batch_timestamp.csv        # Human readable
+│       ├── batch_timestamp.pkl        # Fast loading
+│       └── batch_timestamp.pt         # PyTorch tensors
 ```
 
-### 2. Run the Nodes
+### **Neural Network Architecture**
+The `train/train.py` contains:
 
-**On the Raspberry Pi (in one terminal):**
-This starts the camera and listens for commands.
+1. **SurvivalBotCNN Model**:
+   - **CNN backbone**: 4 conv layers (32→64→128→256 channels)
+   - **Input fusion**: RGB + sensors + VLM action + random distance
+   - **Output heads**: State of charge prediction + optimal distance policy
+
+2. **PolicyDistanceSelector**:
+   - Uses trained model to select optimal distance scaling
+   - Evaluates 10 candidate distances (1.0 to 4.0 meters)
+   - Returns argmax selection for policy learning
+
+3. **Training Features**:
+   - **RGB Images**: Resized to 224x224, ImageNet normalized
+   - **Sensor Data**: IMU (x,y,z), encoders, battery, temperature
+   - **VLM Actions**: One-hot encoded (5 categories)
+   - **Distance Scaling**: Random values 1.0-4.0m
+
+### **How to Train**
 ```bash
-# Deactivate conda if active
-conda deactivate
+cd train
 
-# Source workspace
-cd ~/SurvivalBot
-source /opt/ros/humble/setup.bash
-source install/setup.bash
+# Train the model (after collecting data)
+python train.py
 
-ros2 launch survival_bot_nodes data_server.launch.py
+# Models saved to:
+# - train/models/survival_bot_final.pth (final model)
+# - train/checkpoints/ (epoch checkpoints)
 ```
 
-**On the Dev Machine (in a separate terminal):**
-This runs the VLM navigation, gets images from the Pi, and sends back commands.
-```bash
-# Activate Python 3.10 conda environment (compatible with ROS2)
-conda activate survival_bot
+---
 
-# Source workspace  
-cd ~/SurvivalBot
-source /opt/ros/humble/setup.bash
-source install/setup.bash
+## 🛠️ Setup & Installation
 
-ros2 launch survival_bot_nodes vlm_navigation.launch.py
-```
+### A. Dev Machine Setup (for VLM + Training)
 
-**Note:** Using Python 3.10 conda environment ensures ROS2 compatibility while keeping dependencies isolated.
-
-### 3. How to Test the Full VLM Loop
-
-1.  Start the `data_server.launch.py` on the Pi.
-2.  Start the `vlm_navigation.launch.py` on the Dev Machine.
-3.  **Expected Outcome:**
-    *   The VLM node will start, printing "🧠 VLM Navigation Node Started".
-    *   It will automatically run for 3 cycles (as configured in `vlm_navigation_node.py`).
-    *   In each cycle, it will:
-        1.  Receive an image from the Pi.
-        2.  Save the original and an annotated image to a new `vlm_session_...` folder.
-        3.  Send the image to the Gemini API.
-        4.  Receive an action (e.g., "Move straight forward").
-        5.  Publish the command (e.g., `TURN,0` then `FORWARD,2.0`) back to the Pi.
-    *   The `data_server_node` on the Pi will print the commands it receives.
-    *   After 3 cycles, the VLM node will stop automatically.
-
-### 4. Other Useful Commands
-
-**Run Everything at Once (for testing on single machine):**
-```bash
-# Activate Python 3.10 environment
-conda activate survival_bot
-cd ~/SurvivalBot
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-
-ros2 launch survival_bot_nodes survival_bot.launch.py
-```
-
-**View the Camera Feed Directly (on Dev Machine):**
-```bash
-# Make sure data_server is running on the Pi
-ros2 run survival_bot_nodes camera_viewer_node
-```
-
-**Manual Joystick Control (on Dev Machine):**
-```bash
-# Make sure data_server is running on the Pi
-ros2 run survival_bot_nodes joystick_controller_node
-```
-
-## Pi Deployment Instructions
-
-### On the Raspberry Pi
-
-1. **Clone and build the project:**
+1. **Clone Repository:**
    ```bash
-   cd ~
    git clone git@github.com:jefferzn2001/SurvivalBot.git SurvivalBot
    cd SurvivalBot
-   
-   # Install Pi dependencies
+   ```
+
+2. **Create Python 3.10 Environment:**
+   ```bash
+   conda create -n survival_bot python=3.10 -y
+   conda activate survival_bot
+   ```
+
+3. **Install Dependencies:**
+   ```bash
+   # All dependencies (VLM, ROS2, and neural network training)
+   pip install -r requirements-dev.txt
+   ```
+
+4. **Build ROS2 Package:**
+   ```bash
+   source /opt/ros/humble/setup.bash
+   colcon build --packages-select survival_bot_nodes
+   ```
+
+5. **Set Up Gemini API Key:**
+   ```bash
+   echo "API_KEY=your_actual_api_key_here" > src/survival_bot_nodes/VLMNAV/.env
+   ```
+
+### B. Raspberry Pi Setup
+
+1. **Clone and Build:**
+   ```bash
+   git clone git@github.com:jefferzn2001/SurvivalBot.git SurvivalBot
+   cd SurvivalBot
    pip install -r requirements-pi.txt
    
-   # Build the package
    source /opt/ros/humble/setup.bash
    colcon build --packages-select survival_bot_nodes
    
@@ -211,43 +234,128 @@ ros2 run survival_bot_nodes joystick_controller_node
    cp -r src/survival_bot_nodes/VLMNAV install/survival_bot_nodes/lib/python3.10/site-packages/
    ```
 
-2. **Test the data server:**
+---
+
+## 🎯 Usage Examples
+
+### **Standard VLM Navigation (3 cycles)**
+```bash
+# Pi terminal
+ros2 launch survival_bot_nodes data_server.launch.py
+
+# Dev terminal  
+conda activate survival_bot
+ros2 launch survival_bot_nodes vlm_navigation.launch.py
+```
+
+### **Data Collection Run (10 cycles)**
+```bash
+# Single terminal on dev machine
+conda activate survival_bot
+ros2 launch survival_bot_nodes vlm_navigation_random.launch.py
+```
+**This will**:
+- Run data server (mock camera/sensors)
+- Run VLM with random distances (1-4m)
+- Collect training data for 10 cycles
+- Save data to `train/data/session_YYYYMMDD_HHMMSS/`
+
+### **Neural Network Training**
+```bash
+cd train
+python train.py
+
+# Or customize training:
+python -c "
+from train import train_model
+model = train_model('data/session_20241210_143022', epochs=100, batch_size=16)
+"
+```
+
+### **Policy Testing**
+```bash
+cd train
+python -c "
+from train import test_policy_selector
+policy = test_policy_selector('models/survival_bot_final.pth', 'data/session_20241210_143022')
+"
+```
+
+---
+
+## 📁 Project Structure
+
+```
+SurvivalBot/
+├── src/survival_bot_nodes/           # ROS2 package
+│   ├── survival_bot_nodes/           # Python nodes
+│   │   ├── data_server_node.py       # Pi data provider
+│   │   ├── vlm_navigation_node.py    # Standard VLM (3 cycles)
+│   │   ├── vlm_navigation_random_node.py  # Random VLM (10 cycles)
+│   │   ├── data_collection_node.py   # Training data collector
+│   │   ├── joystick_controller_node.py
+│   │   └── camera_viewer_node.py
+│   ├── launch/                       # Launch files
+│   │   ├── data_server.launch.py
+│   │   ├── vlm_navigation.launch.py
+│   │   ├── vlm_navigation_random.launch.py  # NEW
+│   │   └── survival_bot.launch.py
+│   └── VLMNAV/                       # VLM processing code
+├── train/                            # Neural network training (NEW)
+│   ├── train.py                      # Main training script
+│   ├── requirements.txt              # Training dependencies
+│   ├── data/                         # Training data storage
+│   │   └── session_YYYYMMDD_HHMMSS/  # Session folders
+│   ├── models/                       # Saved models (created during training)
+│   └── checkpoints/                  # Training checkpoints (created during training)
+├── requirements-dev.txt              # Dev machine dependencies
+├── requirements-pi.txt               # Pi dependencies
+└── README.md                         # This file
+```
+
+---
+
+## 🔧 Troubleshooting
+
+### **Common Issues**
+
+1. **"No API key found"**
+   ```bash
+   echo "API_KEY=your_key_here" > src/survival_bot_nodes/VLMNAV/.env
+   ```
+
+2. **"No data files found"**
+   - Run data collection first: `ros2 launch survival_bot_nodes vlm_navigation_random.launch.py`
+   - Check that `train/data/session_*/data/*.csv` files exist
+
+3. **Git authentication errors**
+   ```bash
+   git remote set-url origin git@github.com:jefferzn2001/SurvivalBot.git
+   ```
+
+4. **ROS2 node not found**
    ```bash
    source /opt/ros/humble/setup.bash
    source install/setup.bash
-   ros2 launch survival_bot_nodes data_server.launch.py
    ```
 
-## System Architecture
-
-```
-Dev Machine (VLM)          Pi (Data Server)        Arduino (Optional)
-┌─────────────────┐       ┌─────────────────┐     ┌─────────────┐
-│ vlm_navigation  │ ROS2  │ data_server     │     │ Motors      │
-│ - Gemini API    │ ←───→ │ - Camera feed   │ ──→ │ Sensors     │
-│ - Image proc    │ WiFi  │ - Fake sensors  │ USB │ Actuators   │
-│ - Action plan   │       │ - Command exec  │     │             │
-└─────────────────┘       └─────────────────┘     └─────────────┘
+### **Data Verification**
+```bash
+# Check collected data
+ls -la train/data/session_*/
+ls -la train/data/session_*/images/ | wc -l  # Count images
+ls -la train/data/session_*/data/    # Check data files
 ```
 
-## Available Nodes
+---
 
-- **data_server_node** - Camera/sensor data provider (Pi)
-- **vlm_navigation_node** - VLM navigation with Gemini API (Dev)  
-- **joystick_controller_node** - Manual control (Dev)
-- **camera_viewer_node** - View camera feed (Dev)
+## 🎯 Tomorrow's Workflow
 
-## Folders
+1. **Activate environment**: `conda activate survival_bot`
+2. **Source workspace**: `source /opt/ros/humble/setup.bash && source install/setup.bash`
+3. **Collect data**: `ros2 launch survival_bot_nodes vlm_navigation_random.launch.py`
+4. **Train model**: `cd train && python train.py`
+5. **Test policy**: Run policy selector functions
+6. **Push changes**: `git add . && git commit -m "message" && git push origin main`
 
-- **src/survival_bot_nodes/** - ROS2 package with all nodes
-- **src/survival_bot_nodes/VLMNAV/** - VLM processing code (annotation, prompts)
-- **requirements-dev.txt** - Dev machine dependencies (VLM/AI)
-- **requirements-pi.txt** - Pi dependencies (minimal)
-
-## Notes
-
-- ✅ **All ROS2 launch files work properly!**
-- ✅ **Updated workspace name from ros2_ws to SurvivalBot**
-- Use Python 3.10 conda environment for VLM processing on dev machine
-- VLM navigation requires Gemini API key
-- Pi uses system Python with minimal dependencies
+**Everything is ready for neural network development and testing!** 🚀

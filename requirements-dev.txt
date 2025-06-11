@@ -1,4 +1,4 @@
-# Dev Machine Requirements - VLM Navigation
+# Dev Machine Requirements - VLM Navigation + Neural Network Training
 # Install in conda environment: pip install -r requirements-dev.txt
 
 # Core dependencies
@@ -10,21 +10,30 @@ google-generativeai==0.3.2
 python-dotenv==1.0.0
 Pillow==10.0.1
 
-# PyTorch with CUDA (for future training)
+# PyTorch with CUDA (for neural network training)
 --index-url https://download.pytorch.org/whl/cu124
 torch==2.4.0+cu124
 torchvision==0.19.0+cu124
 torchaudio==2.4.0+cu124
 
+# Neural Network Training dependencies
+pandas>=1.5.0
+seaborn>=0.12.0
+scikit-learn>=1.3.0
+tqdm>=4.65.0
+tensorboard>=2.13.0
+
+# Visualization and analysis
+matplotlib==3.7.2
+
 # Optional for joystick control
 pygame>=2.1.0 
+
+# Networking
+requests==2.31.0
 
 # ROS2 Python packages (if needed in conda environment)
 # Note: These are usually provided by system ROS2
 # rclpy  # Provided by system ROS2
 # sensor-msgs  # Provided by system ROS2
-# std-msgs  # Provided by system ROS2
-
-# Additional useful packages
-matplotlib==3.7.2
-requests==2.31.0 
+# std-msgs  # Provided by system ROS2 
