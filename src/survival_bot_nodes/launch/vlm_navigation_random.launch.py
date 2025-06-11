@@ -5,41 +5,38 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     return LaunchDescription([
-        # Data Server Node
+        # Data Server - handles Arduino and camera
         Node(
             package='survival_bot_nodes',
-            executable='data_server_node',
+            executable='data_server_node.py',
             name='data_server_node',
             output='screen',
-            parameters=[
-                {'camera_index': 0},
-                {'image_width': 640},
-                {'image_height': 480}
-            ]
+            parameters=[{
+                'enable_arduino': True,
+                'enable_camera': True
+            }]
         ),
         
-        # VLM Random Navigation Node  
+        # VLM Navigation Random Node
         Node(
             package='survival_bot_nodes',
-            executable='vlm_navigation_random_node',
+            executable='vlm_navigation_random_node.py',
             name='vlm_navigation_random_node',
             output='screen',
-            parameters=[
-                {'goal': 'white shoe'},
-                {'max_iterations': 10},
-                {'navigation_interval': 10.0}
-            ]
+            parameters=[{
+                'goal': 'Explore and find interesting objects',
+                'max_iterations': 5.0,
+                'navigation_interval': 8.0,
+                'random_movements': True,
+                'use_fake_data': False
+            }]
         ),
         
-        # Data Collection Node
+        # Camera Viewer
         Node(
-            package='survival_bot_nodes',
-            executable='data_collection_node', 
-            name='data_collection_node',
-            output='screen',
-            parameters=[
-                {'output_dir': './train/data'},
-                {'save_interval': 30.0}
-            ]
+            package='survival_bot_nodes', 
+            executable='camera_viewer_node.py',
+            name='camera_viewer_node',
+            output='screen'
         )
     ]) 

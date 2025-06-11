@@ -8,7 +8,7 @@ def generate_launch_description():
         # VLM Navigation Node Only
         Node(
             package='survival_bot_nodes',
-            executable='vlm_navigation_node',
+            executable='vlm_navigation_node.py',
             name='vlm_navigation_node',
             output='screen'
         )

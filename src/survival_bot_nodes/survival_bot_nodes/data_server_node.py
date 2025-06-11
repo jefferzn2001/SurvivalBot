@@ -37,6 +37,12 @@ class DataServerNode(Node):
         self.arduino = None
         self.baudrate = 115200
         self.latest_sensor_data = {}
+        self.pending_command = None
+        self.command_start_time = None
+        self.movement_detected = False
+        self.encoder_start_left = 0
+        self.encoder_start_right = 0
+        self.last_encoder_check_time = 0
         
         if self.enable_arduino:
             self.setup_arduino()
@@ -201,11 +207,62 @@ class DataServerNode(Node):
             self.get_logger().warning(f"Arduino read error: {e}")
     
     def publish_sensor_data(self):
-        """Publish latest sensor data"""
+        """Publish latest sensor data and check for movement completion"""
         if self.latest_sensor_data:
             msg = String()
             msg.data = json.dumps(self.latest_sensor_data)
             self.sensor_pub.publish(msg)
+            
+            # Check for command completion based on actual robot state
+            self.check_movement_completion()
+    
+    def check_movement_completion(self):
+        """Check if robot has completed movement based on sensor data"""
+        if not self.pending_command or not self.latest_sensor_data:
+            return
+            
+        try:
+            # Get current robot state
+            mode = self.latest_sensor_data.get('mode', 'idle')
+            encoders = self.latest_sensor_data.get('encoders', {})
+            current_left = encoders.get('left', 0)
+            current_right = encoders.get('right', 0)
+            
+            # Calculate encoder differences from start position
+            left_diff = abs(current_left - self.encoder_start_left)
+            right_diff = abs(current_right - self.encoder_start_right)
+            
+            # Detect if robot has moved significantly (threshold of 10 encoder ticks)
+            if left_diff > 10 or right_diff > 10:
+                self.movement_detected = True
+            
+            # Check if movement has completed
+            command_age = time.time() - self.command_start_time if self.command_start_time else 0
+            
+            # Movement complete if:
+            # 1. Robot mode is 'idle' (Arduino finished) AND we detected movement
+            # 2. Or timeout reached
+            
+            movement_stopped = (mode == 'idle' and self.movement_detected)
+            timeout_reached = command_age > 30.0  # Safety timeout
+            
+            if movement_stopped or timeout_reached:
+                completion_reason = "movement stopped" if movement_stopped else "timeout"
+                self.get_logger().info(f"✅ Command completed ({completion_reason}): {self.pending_command}")
+                self.get_logger().info(f"   Encoder changes: L={left_diff}, R={right_diff}")
+                
+                # Send completion
+                status_msg = String()
+                status_msg.data = f"COMPLETED:{self.pending_command}"
+                self.status_pub.publish(status_msg)
+                
+                # Reset tracking
+                self.pending_command = None
+                self.command_start_time = None
+                self.movement_detected = False
+                
+        except Exception as e:
+            self.get_logger().warning(f"Movement detection error: {e}")
     
     def command_callback(self, msg):
         """Handle robot commands"""
@@ -214,7 +271,16 @@ class DataServerNode(Node):
         
         if not self.arduino:
             self.get_logger().warning("⚠️ No Arduino - simulating")
-            time.sleep(1)
+            # Better simulation timing for VLM
+            if "TURN" in command:
+                time.sleep(4.0)  # Turn simulation
+            elif "FORWARD" in command or "BACKWARD" in command:
+                time.sleep(5.0)  # Movement simulation  
+            elif "STOP" in command:
+                time.sleep(0.5)  # Stop simulation
+            else:
+                time.sleep(1.0)  # Default
+                
             status_msg = String()
             status_msg.data = f"COMPLETED:{command}"
             self.status_pub.publish(status_msg)
@@ -223,14 +289,36 @@ class DataServerNode(Node):
         try:
             arduino_command = self.convert_command(command)
             if arduino_command:
+                # Set encoder baseline from current position
+                encoders = self.latest_sensor_data.get('encoders', {})
+                self.encoder_start_left = encoders.get('left', 0)
+                self.encoder_start_right = encoders.get('right', 0)
+                
+                # Start tracking this command
+                self.pending_command = command
+                self.command_start_time = time.time()
+                self.movement_detected = False
+                
+                # Send to Arduino
                 self.arduino.write(f"{arduino_command}\n".encode())
                 self.get_logger().info(f"   📡 Sent: {arduino_command}")
+                self.get_logger().info(f"   ⏳ Waiting for movement completion...")
+                self.get_logger().info(f"   Encoder baseline: L={self.encoder_start_left}, R={self.encoder_start_right}")
                 
-                # Send completion after delay
-                self.create_timer(1.0, lambda: self.send_completion(command), oneshot=True)
+                # For STOP commands, send immediate completion since they don't involve movement
+                if "STOP" in arduino_command:
+                    time.sleep(0.5)  # Brief delay for Arduino to process
+                    status_msg = String()
+                    status_msg.data = f"COMPLETED:{command}"
+                    self.status_pub.publish(status_msg)
+                    self.pending_command = None
+                    self.command_start_time = None
             
         except Exception as e:
             self.get_logger().error(f"❌ Command failed: {e}")
+            # Clear pending command on error
+            self.pending_command = None
+            self.command_start_time = None
     
     def convert_command(self, ros_command):
         """Convert ROS2 command to Arduino format"""
@@ -255,12 +343,6 @@ class DataServerNode(Node):
             
         else:
             return None
-    
-    def send_completion(self, command):
-        """Send completion status"""
-        status_msg = String()
-        status_msg.data = f"COMPLETED:{command}"
-        self.status_pub.publish(status_msg)
 
 def main(args=None):
     rclpy.init(args=args)

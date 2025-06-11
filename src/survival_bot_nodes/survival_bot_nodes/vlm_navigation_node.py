@@ -23,7 +23,7 @@ try:
     import importlib.util
     
     # Load modules manually to avoid main.py serial initialization
-    vlmnav_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'VLMNAV'))
+    vlmnav_path = os.path.abspath(os.path.join(os.path.expanduser('~'), 'SurvivalBot', 'src', 'survival_bot_nodes', 'VLMNAV'))
     
     # Import annotation module
     annotation_spec = importlib.util.spec_from_file_location("annotation", os.path.join(vlmnav_path, "annotation.py"))
@@ -134,11 +134,11 @@ class VLMNavigationNode(Node):
         
         # Action mapping
         self.actions = {
-            1: {"angle": -60, "desc": "Turn left 60° then forward 1m"},
-            2: {"angle": -35, "desc": "Turn left 35° then forward 1m"},
-            3: {"angle": 0, "desc": "Move straight forward 1m"},
-            4: {"angle": 35, "desc": "Turn right 35° then forward 1m"},
-            5: {"angle": 60, "desc": "Turn right 60° then forward 1m"}
+            1: {"angle": 60, "desc": "Turn right 60° then forward 2m"},
+            2: {"angle": 35, "desc": "Turn right 35° then forward 2m"},
+            3: {"angle": 0, "desc": "Move straight forward 2m"},
+            4: {"angle": -35, "desc": "Turn left 35° then forward 2m"},
+            5: {"angle": -60, "desc": "Turn left 60° then forward 2m"}
         }
         
         # Start navigation
@@ -252,18 +252,18 @@ class VLMNavigationNode(Node):
                 turn_cmd = f"TURN,{angle}"
                 self.send_command(turn_cmd)
                 self.get_logger().info(f"   🔄 Turning {angle}°...")
-                self.wait_for_completion(turn_cmd)
+                self.wait_for_completion(turn_cmd, timeout=30.0)  # Wait for actual turn completion
             
-            # Move forward 1 meter (changed from 2.0)
-            forward_cmd = "FORWARD,1.0"
+            # Move forward 2 meters
+            forward_cmd = "FORWARD,2.0"
             self.send_command(forward_cmd)
-            self.get_logger().info(f"   ⬆️ Moving forward 1m...")
-            self.wait_for_completion(forward_cmd)
+            self.get_logger().info(f"   ⬆️ Moving forward 2m...")
+            self.wait_for_completion(forward_cmd, timeout=30.0)  # Wait for actual movement completion
             
             # Stop
             stop_cmd = "STOP"
             self.send_command(stop_cmd)
-            self.wait_for_completion(stop_cmd)
+            self.wait_for_completion(stop_cmd, timeout=5.0)
             
             self.get_logger().info(f"✅ Action {action} completed")
             
@@ -290,20 +290,17 @@ class VLMNavigationNode(Node):
         self.last_command = command
         self.waiting_for_completion = True
         
-        # Use fixed delays for simulation, or wait for feedback for real robot
-        if "TURN" in command:
-            time.sleep(3.0)  # Simulation delay
-        elif "FORWARD" in command:
-            time.sleep(3.0)  # Simulation delay  
-        elif "STOP" in command:
-            time.sleep(1.0)  # Simulation delay
+        start_time = time.time()
         
-        # For real robot, you could implement:
-        # start_time = time.time()
-        # while self.waiting_for_completion and (time.time() - start_time) < timeout:
-        #     rclpy.spin_once(self, timeout_sec=0.1)
+        # Wait for actual robot feedback or timeout
+        while self.waiting_for_completion and (time.time() - start_time) < timeout:
+            rclpy.spin_once(self, timeout_sec=0.1)
         
-        self.waiting_for_completion = False
+        if self.waiting_for_completion:
+            self.get_logger().warning(f"⚠️ Command timeout: {command}")
+            self.waiting_for_completion = False
+        else:
+            self.get_logger().info(f"✅ Command completed: {command}")
 
 def main(args=None):
     rclpy.init(args=args)

@@ -156,8 +156,21 @@ class JoystickControllerNode(Node):
                 left_pwm = 0
                 right_pwm = 0
         
-        # Create command - ALWAYS use PWM format
-        command = f"PWM,{left_pwm},{right_pwm}"
+        # HARDWARE FIX: Remap negative PWM values for correct hardware operation
+        # Hardware expects: -1 = fastest, -255 = slowest (inverted from normal)
+        # ONLY remap first value (right wheels), keep second value (left wheels) unchanged
+        def remap_first_value_only(pwm_value):
+            if pwm_value < 0:
+                # Remap -255 to -1 (fastest) and -1 to -255 (slowest)
+                return -(256 - abs(pwm_value))
+            return pwm_value
+        
+        # Apply remapping ONLY to right wheels (first PWM value)
+        remapped_right = remap_first_value_only(right_pwm)
+        # Keep left wheels unchanged
+        remapped_left = left_pwm
+        
+        command = f"PWM,{remapped_right},{remapped_left}"
         
         # ALWAYS send command for immediate response
         self.send_command(command)
