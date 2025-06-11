@@ -126,12 +126,6 @@ class VLMNavigationNode(Node):
             CompressedImage, 'robot/camera/compressed', self.image_callback, 10)
         self.command_pub = self.create_publisher(String, 'robot/command', 10)
         
-        # Status subscription for real robot feedback
-        self.status_sub = self.create_subscription(
-            String, 'robot/status', self.status_callback, 10)
-        self.waiting_for_completion = False
-        self.last_command = ""
-        
         # Action mapping
         self.actions = {
             1: {"angle": 60, "desc": "Turn right 60° then forward 2m"},
@@ -240,7 +234,7 @@ class VLMNavigationNode(Node):
             self.get_logger().error(f"❌ Navigation cycle failed: {e}")
     
     def execute_action(self, action):
-        """Execute VLM action"""
+        """Execute VLM action with fixed timing"""
         try:
             angle = self.actions[action]["angle"]
             desc = self.actions[action]["desc"]
@@ -251,21 +245,16 @@ class VLMNavigationNode(Node):
             if angle != 0:
                 turn_cmd = f"TURN,{angle}"
                 self.send_command(turn_cmd)
-                self.get_logger().info(f"   🔄 Turning {angle}°...")
-                self.wait_for_completion(turn_cmd, timeout=30.0)  # Wait for actual turn completion
+                self.get_logger().info(f"   🔄 Turning {angle}° for 3 seconds...")
+                time.sleep(3.0)  # Fixed 3 second delay for turn
             
             # Move forward 2 meters
             forward_cmd = "FORWARD,2.0"
             self.send_command(forward_cmd)
             self.get_logger().info(f"   ⬆️ Moving forward 2m...")
-            self.wait_for_completion(forward_cmd, timeout=30.0)  # Wait for actual movement completion
+            time.sleep(0.1)  # Brief delay then let it run
             
-            # Stop
-            stop_cmd = "STOP"
-            self.send_command(stop_cmd)
-            self.wait_for_completion(stop_cmd, timeout=5.0)
-            
-            self.get_logger().info(f"✅ Action {action} completed")
+            self.get_logger().info(f"✅ Action {action} commands sent")
             
         except Exception as e:
             self.get_logger().error(f"❌ Execution failed: {e}")
@@ -275,32 +264,6 @@ class VLMNavigationNode(Node):
         msg = String()
         msg.data = command
         self.command_pub.publish(msg)
-
-    def status_callback(self, msg):
-        """Handle status updates from the robot"""
-        status_data = msg.data
-        if status_data.startswith("COMPLETED:"):
-            completed_cmd = status_data.replace("COMPLETED:", "")
-            if completed_cmd == self.last_command:
-                self.waiting_for_completion = False
-                self.get_logger().info(f"✅ Robot confirmed: {completed_cmd}")
-    
-    def wait_for_completion(self, command, timeout=10.0):
-        """Wait for robot to complete the command"""
-        self.last_command = command
-        self.waiting_for_completion = True
-        
-        start_time = time.time()
-        
-        # Wait for actual robot feedback or timeout
-        while self.waiting_for_completion and (time.time() - start_time) < timeout:
-            rclpy.spin_once(self, timeout_sec=0.1)
-        
-        if self.waiting_for_completion:
-            self.get_logger().warning(f"⚠️ Command timeout: {command}")
-            self.waiting_for_completion = False
-        else:
-            self.get_logger().info(f"✅ Command completed: {command}")
 
 def main(args=None):
     rclpy.init(args=args)

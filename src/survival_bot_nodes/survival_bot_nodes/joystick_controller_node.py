@@ -128,13 +128,13 @@ class JoystickControllerNode(Node):
         if lt_value > 0 or rt_value > 0:
             # Pure trigger turning - ignore stick inputs
             if lt_value > rt_value:
-                # Left trigger pressed - turn left (FIXED: swapped values)
-                left_pwm = trigger_turn_pwm   # +150
-                right_pwm = -trigger_turn_pwm # -150
-            else:
-                # Right trigger pressed - turn right (FIXED: swapped values)
+                # Left trigger pressed - turn left (FIXED AGAIN: swapped back)
                 left_pwm = -trigger_turn_pwm  # -150
                 right_pwm = trigger_turn_pwm  # +150
+            else:
+                # Right trigger pressed - turn right (FIXED AGAIN: swapped back)
+                left_pwm = trigger_turn_pwm   # +150
+                right_pwm = -trigger_turn_pwm # -150
         else:
             # Normal stick control when no triggers pressed
             # Calculate base forward/backward movement from left stick Y
@@ -170,7 +170,13 @@ class JoystickControllerNode(Node):
         # Keep left wheels unchanged
         remapped_left = left_pwm
         
-        command = f"PWM,{remapped_right},{remapped_left}"
+        # DIRECTIONAL FIX: When both PWM values are positive, swap them
+        if remapped_right > 0 and remapped_left > 0:
+            # Swap for positive values
+            command = f"PWM,{remapped_left},{remapped_right}"
+        else:
+            # Keep normal order for negative values (working correctly)
+            command = f"PWM,{remapped_right},{remapped_left}"
         
         # ALWAYS send command for immediate response
         self.send_command(command)
