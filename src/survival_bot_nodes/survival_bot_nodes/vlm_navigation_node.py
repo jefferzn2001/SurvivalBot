@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VLM Navigation Node - Real VLM navigation with timing
+VLM Navigation Node - Standard VLM navigation with 1m base distance
 """
 
 import rclpy
@@ -104,7 +104,7 @@ class VLMNavigationNode(Node):
         
         # Parameters
         self.declare_parameter('goal', 'Max Sunlight Location')
-        self.declare_parameter('max_iterations', 10.0)
+        self.declare_parameter('max_iterations', 3.0)
         self.declare_parameter('navigation_interval', 10.0)
         
         self.goal = self.get_parameter('goal').value
@@ -126,21 +126,25 @@ class VLMNavigationNode(Node):
             CompressedImage, 'robot/camera/compressed', self.image_callback, 10)
         self.command_pub = self.create_publisher(String, 'robot/command', 10)
         
-        # Action mapping
+        # VLM decision publisher for data collection
+        self.vlm_decision_pub = self.create_publisher(String, 'vlm/decision', 10)
+        
+        # Action mapping - base distance 1 meter
         self.actions = {
-            1: {"angle": 60, "desc": "Turn right 60° then forward 2m"},
-            2: {"angle": 35, "desc": "Turn right 35° then forward 2m"},
-            3: {"angle": 0, "desc": "Move straight forward 2m"},
-            4: {"angle": -35, "desc": "Turn left 35° then forward 2m"},
-            5: {"angle": -60, "desc": "Turn left 60° then forward 2m"}
+            1: {"angle": 60, "base_distance": 1.0, "desc": "Turn right 60° then forward 1m"},
+            2: {"angle": 35, "base_distance": 1.0, "desc": "Turn right 35° then forward 1m"},
+            3: {"angle": 0, "base_distance": 1.0, "desc": "Move straight forward 1m"},
+            4: {"angle": -35, "base_distance": 1.0, "desc": "Turn left 35° then forward 1m"},
+            5: {"angle": -60, "base_distance": 1.0, "desc": "Turn left 60° then forward 1m"}
         }
         
         # Start navigation
         self.navigation_timer = self.create_timer(self.navigation_interval, self.navigation_cycle)
         
-        self.get_logger().info("🧠 VLM Navigation Node Started")
+        self.get_logger().info("🧠 VLM Navigation Node Started (Standard)")
         self.get_logger().info(f"   Goal: {self.goal}")
         self.get_logger().info(f"   Max cycles: {self.max_iterations}")
+        self.get_logger().info(f"   Base distance: 1.0m (no randomness)")
         self.get_logger().info(f"   Session: {self.session_dir}")
     
     def image_callback(self, msg):
@@ -208,6 +212,9 @@ class VLMNavigationNode(Node):
             self.get_logger().info(f"⏱️ VLM Response Time: {vlm_time:.2f} seconds")
             self.get_logger().info(f"📝 VLM Reasoning: {response.text[:100]}...")
             
+            # Publish VLM decision for data collection
+            self.publish_vlm_decision(action, self.actions[action]["base_distance"], response.text[:200])
+            
             # Execute action
             execute_start = time.time()
             self.execute_action(action)
@@ -227,6 +234,7 @@ class VLMNavigationNode(Node):
                 f.write(f"Time: {datetime.now()}\n")
                 f.write(f"VLM Response Time: {vlm_time:.2f}s\n")
                 f.write(f"Action: {action} - {action_desc}\n")
+                f.write(f"Distance: {self.actions[action]['base_distance']}m (no random)\n")
                 f.write(f"Response: {response.text[:200]}...\n")
                 f.write("-" * 40 + "\n")
                 
@@ -234,9 +242,10 @@ class VLMNavigationNode(Node):
             self.get_logger().error(f"❌ Navigation cycle failed: {e}")
     
     def execute_action(self, action):
-        """Execute VLM action with fixed timing"""
+        """Execute VLM action with 1m base distance"""
         try:
             angle = self.actions[action]["angle"]
+            distance = self.actions[action]["base_distance"]  # Always 1.0m
             desc = self.actions[action]["desc"]
             
             self.get_logger().info(f"🚀 EXECUTING: {desc}")
@@ -248,16 +257,36 @@ class VLMNavigationNode(Node):
                 self.get_logger().info(f"   🔄 Turning {angle}° for 3 seconds...")
                 time.sleep(3.0)  # Fixed 3 second delay for turn
             
-            # Move forward 2 meters
-            forward_cmd = "FORWARD,2.0"
+            # Move forward with base distance
+            forward_cmd = f"FORWARD,{distance}"
             self.send_command(forward_cmd)
-            self.get_logger().info(f"   ⬆️ Moving forward 2m...")
+            self.get_logger().info(f"   ⬆️ Moving forward {distance}m...")
             time.sleep(0.1)  # Brief delay then let it run
             
             self.get_logger().info(f"✅ Action {action} commands sent")
             
         except Exception as e:
             self.get_logger().error(f"❌ Execution failed: {e}")
+    
+    def publish_vlm_decision(self, action, distance, reasoning):
+        """Publish VLM decision for data collection"""
+        try:
+            decision_data = {
+                'action': action,
+                'distance': distance,
+                'random_distance_added': 0.0,  # No randomness in standard VLM
+                'total_distance': distance,
+                'reasoning': reasoning,
+                'timestamp': datetime.now().isoformat(),
+                'vlm_type': 'standard'
+            }
+            
+            msg = String()
+            msg.data = json.dumps(decision_data)
+            self.vlm_decision_pub.publish(msg)
+            
+        except Exception as e:
+            self.get_logger().error(f"VLM decision publish failed: {e}")
     
     def send_command(self, command):
         """Send command to robot"""

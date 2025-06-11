@@ -16,7 +16,7 @@ source /opt/ros/humble/setup.bash
 source install/setup.bash
 ```
 
-### 2. **Run Standard VLM Navigation (3 cycles)**
+### 2. **Run Standard VLM Navigation (3 cycles, 1m base distance)**
 ```bash
 # Terminal 1 (Pi): Data server
 ros2 launch survival_bot_nodes data_server.launch.py
@@ -25,7 +25,7 @@ ros2 launch survival_bot_nodes data_server.launch.py
 ros2 launch survival_bot_nodes vlm_navigation.launch.py
 ```
 
-### 3. **Run Random VLM + Data Collection (10 cycles)**
+### 3. **Run Random VLM + Data Collection (10 cycles, 1-4m distance)**
 ```bash
 # Single command runs all 3 nodes together
 ros2 launch survival_bot_nodes vlm_navigation_random.launch.py
@@ -76,7 +76,7 @@ Dev Machine                    Pi                 Training Pipeline
 │ VLM Navigation      │ ROS2  │ Data Server │    │ Neural Network  │
 │ - Gemini API        │ ←───→ │ - Camera    │    │ - CNN for RGB   │
 │ - Random Distance   │ WiFi  │ - Sensors   │    │ - Policy Learn  │
-│ - Data Collection   │       │ - Commands  │    │ - SOC Predict   │
+│ - Data Collection   │       │ - Commands  │    │ - Motion Track  │
 └─────────────────────┘       └─────────────┘    └─────────────────┘
          │                                                 ▲
          └─────────── Training Data ────────────────────────┘
@@ -87,37 +87,44 @@ Dev Machine                    Pi                 Training Pipeline
 ## 🤖 Available Nodes & How They Work
 
 ### **1. data_server_node** (Runs on Pi)
-- **Purpose**: Provides camera feed and sensor data
+- **Purpose**: Provides camera feed and sensor data from Arduino
 - **What it does**:
   - Captures camera images at 10Hz (640x480)
-  - Generates mock sensor data (IMU, encoders, battery)
+  - Reads Arduino JSON sensor data directly (including motion status)
   - Receives and executes robot commands
   - Publishes status confirmations
 - **Topics**:
   - Publishes: `robot/camera/compressed`, `robot/sensor_data`, `robot/status`
   - Subscribes: `robot/command`
+- **Motion Detection**: Arduino provides motion status directly via JSON
 
 ### **2. vlm_navigation_node** (Runs on Dev Machine)
-- **Purpose**: Standard VLM navigation (3 cycles, 1m distance)
+- **Purpose**: Standard VLM navigation (3 cycles, 1m base distance)
 - **What it does**:
   - Gets camera images every 10 seconds
   - Annotates images with bounding boxes
   - Sends to Gemini API for decision making
   - Executes turn + 1m forward movement
   - Saves session data and VLM reasoning
+- **Distance**: Fixed 1.0m base distance (no randomness)
 - **Stops after**: 3 cycles
 
 ### **3. vlm_navigation_random_node** (Runs on Dev Machine) 
 - **Purpose**: VLM navigation with random distance variation (10 cycles)
 - **What it does**:
-  - Same as standard VLM but with random distance: **1 + (0-3) meters**
+  - Same as standard VLM but with random distance: **1.0m base + (0-3m) random**
   - Records the random distance for each action
   - Publishes VLM decisions to `vlm/decision` topic
   - Runs for 10 cycles instead of 3
-- **Key difference**: Distance varies from 1.0m to 4.0m randomly
+- **Key difference**: Distance varies from 1.0m to 4.0m (1m base + 0-3m random)
 
 ### **4. data_collection_node** (Runs on Dev Machine)
-- **Purpose**: Collects neural network training data
+- **Purpose**: Intelligent training data collection
+- **Collection Strategy**:
+  - **10 data points per VLM command cycle** (start to robot stop)
+  - **15 data points for turning** commands (more complex)
+  - **Only collects when robot is active** (moving or just started/stopped)
+  - **Motion state tracking**: Categorical (moving/stationary)
 - **What it does**:
   - Subscribes to camera, sensors, commands, and VLM decisions
   - Saves images to `train/data/session_YYYYMMDD_HHMMSS/images/`
@@ -127,6 +134,8 @@ Dev Machine                    Pi                 Training Pipeline
 
 ### **5. joystick_controller_node** (Manual Control)
 - **Purpose**: Manual robot control with gamepad
+- **PWM Control**: Standard -255 to 255 range (no remapping needed)
+- **Format**: `PWM,right_wheels,left_wheels`
 - **Usage**: `ros2 run survival_bot_nodes joystick_controller_node`
 
 ### **6. camera_viewer_node** (Debugging)
@@ -137,8 +146,15 @@ Dev Machine                    Pi                 Training Pipeline
 
 ## 📊 Neural Network Training System
 
-### **Training Data Location**
-All training data is stored in:
+### **Training Data Collection Details**
+
+**Data Collection Strategy**:
+- **Trigger**: VLM command issued → start collection
+- **Collection Points**: 10 images per command cycle (15 for turns)
+- **Motion States**: Only when robot is active (moving) or at start/stop transitions
+- **Stop Condition**: Robot motion changes from "moving" to "stop"
+
+**Data Structure**:
 ```
 train/data/
 ├── session_20241210_143022/          # Session directory  
@@ -151,13 +167,20 @@ train/data/
 │       └── batch_timestamp.pt         # PyTorch tensors
 ```
 
+**Data Fields**:
+- **Images**: RGB frames with collection point tracking
+- **Motion State**: Categorical (moving/stationary)
+- **VLM Actions**: Standard (no random) vs Random (1-4m distance)
+- **Sensor Data**: Arduino JSON (IMU, encoders, environment, bumpers)
+- **Collection Metadata**: Point number, target points, timing
+
 ### **Neural Network Architecture**
 The `train/train.py` contains:
 
 1. **SurvivalBotCNN Model**:
    - **CNN backbone**: 4 conv layers (32→64→128→256 channels)
-   - **Input fusion**: RGB + sensors + VLM action + random distance
-   - **Output heads**: State of charge prediction + optimal distance policy
+   - **Input fusion**: RGB + sensors + VLM action + distance variation
+   - **Output heads**: Motion prediction + optimal distance policy
 
 2. **PolicyDistanceSelector**:
    - Uses trained model to select optimal distance scaling
@@ -168,7 +191,8 @@ The `train/train.py` contains:
    - **RGB Images**: Resized to 224x224, ImageNet normalized
    - **Sensor Data**: IMU (x,y,z), encoders, battery, temperature
    - **VLM Actions**: One-hot encoded (5 categories)
-   - **Distance Scaling**: Random values 1.0-4.0m
+   - **Distance Scaling**: Random values 1.0-4.0m or fixed 1.0m
+   - **Motion States**: Categorical classification target
 
 ### **How to Train**
 ```bash
@@ -238,7 +262,7 @@ python train.py
 
 ## 🎯 Usage Examples
 
-### **Standard VLM Navigation (3 cycles)**
+### **Standard VLM Navigation (3 cycles, 1m distance)**
 ```bash
 # Pi terminal
 ros2 launch survival_bot_nodes data_server.launch.py
@@ -248,16 +272,16 @@ conda activate survival_bot
 ros2 launch survival_bot_nodes vlm_navigation.launch.py
 ```
 
-### **Data Collection Run (10 cycles)**
+### **Data Collection Run (10 cycles with random distances)**
 ```bash
 # Single terminal on dev machine
 conda activate survival_bot
 ros2 launch survival_bot_nodes vlm_navigation_random.launch.py
 ```
 **This will**:
-- Run data server (mock camera/sensors)
+- Run data server (camera/Arduino sensors)
 - Run VLM with random distances (1-4m)
-- Collect training data for 10 cycles
+- Collect 10 training data points per command cycle
 - Save data to `train/data/session_YYYYMMDD_HHMMSS/`
 
 ### **Neural Network Training**
@@ -289,19 +313,21 @@ policy = test_policy_selector('models/survival_bot_final.pth', 'data/session_202
 SurvivalBot/
 ├── src/survival_bot_nodes/           # ROS2 package
 │   ├── survival_bot_nodes/           # Python nodes
-│   │   ├── data_server_node.py       # Pi data provider
-│   │   ├── vlm_navigation_node.py    # Standard VLM (3 cycles)
-│   │   ├── vlm_navigation_random_node.py  # Random VLM (10 cycles)
-│   │   ├── data_collection_node.py   # Training data collector
-│   │   ├── joystick_controller_node.py
+│   │   ├── data_server_node.py       # Pi data provider (Arduino motion status)
+│   │   ├── vlm_navigation_node.py    # Standard VLM (3 cycles, 1m)
+│   │   ├── vlm_navigation_random_node.py  # Random VLM (10 cycles, 1-4m)
+│   │   ├── data_collection_node.py   # Intelligent 10-point collection
+│   │   ├── joystick_controller_node.py # Fixed PWM control
 │   │   └── camera_viewer_node.py
 │   ├── launch/                       # Launch files
 │   │   ├── data_server.launch.py
 │   │   ├── vlm_navigation.launch.py
-│   │   ├── vlm_navigation_random.launch.py  # NEW
+│   │   ├── vlm_navigation_random.launch.py
 │   │   └── survival_bot.launch.py
 │   └── VLMNAV/                       # VLM processing code
-├── train/                            # Neural network training (NEW)
+├── LowLevelCode/                     # Arduino firmware (motion status provider)
+│   └── DEMO.ino                      # Updated with motion JSON output
+├── train/                            # Neural network training
 │   ├── train.py                      # Main training script
 │   ├── requirements.txt              # Training dependencies
 │   ├── data/                         # Training data storage
@@ -339,12 +365,24 @@ SurvivalBot/
    source install/setup.bash
    ```
 
+5. **PWM control issues**
+   - Arduino firmware now fixed, no remapping needed
+   - PWM format: `PWM,right_wheels,left_wheels` (-255 to 255)
+
 ### **Data Verification**
 ```bash
 # Check collected data
 ls -la train/data/session_*/
 ls -la train/data/session_*/images/ | wc -l  # Count images
 ls -la train/data/session_*/data/    # Check data files
+
+# Check motion state distribution
+python -c "
+import pandas as pd
+df = pd.read_csv('train/data/session_*/data/batch_*.csv')
+print('Motion states:', df['motion_state'].value_counts())
+print('Collection points per cycle:', df.groupby('collection_point').size())
+"
 ```
 
 ---
@@ -357,5 +395,12 @@ ls -la train/data/session_*/data/    # Check data files
 4. **Train model**: `cd train && python train.py`
 5. **Test policy**: Run policy selector functions
 6. **Push changes**: `git add . && git commit -m "message" && git push origin main`
+
+**Key Changes Made**:
+- ✅ **Arduino motion status**: Direct JSON output, no calculation needed
+- ✅ **Intelligent data collection**: 10 points per cycle, motion-aware
+- ✅ **VLM distances**: Standard=1m, Random=1-4m (1m base + 0-3m)
+- ✅ **PWM fixed**: Standard -255 to 255, no remapping
+- ✅ **Motion tracking**: Categorical states for neural network training
 
 **Everything is ready for neural network development and testing!** 🚀

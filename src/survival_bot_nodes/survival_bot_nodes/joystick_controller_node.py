@@ -48,6 +48,7 @@ class JoystickControllerNode(Node):
         self.get_logger().info("🎮 Joystick Controller Node Started")
         self.get_logger().info(f"   Control mode: {self.control_mode}")
         self.get_logger().info("   Left stick: Movement, LT/RT: Turn left/right")
+        self.get_logger().info("   PWM format: PWM,right_wheels,left_wheels")
         self.get_logger().info("   Buttons: Mode switch")
     
     def joystick_callback(self):
@@ -119,7 +120,7 @@ class JoystickControllerNode(Node):
             self.handle_discrete_control(left_stick_x, left_stick_y, lt_value, rt_value)
     
     def handle_pwm_control(self, stick_x, stick_y, lt_value, rt_value):
-        """Handle continuous PWM control with trigger turning"""
+        """Handle continuous PWM control with trigger turning - simplified without remapping"""
         # Convert stick inputs to motor PWM values (-255 to 255)
         max_pwm = 255
         trigger_turn_pwm = 150  # Exact PWM for trigger turning
@@ -128,55 +129,36 @@ class JoystickControllerNode(Node):
         if lt_value > 0 or rt_value > 0:
             # Pure trigger turning - ignore stick inputs
             if lt_value > rt_value:
-                # Left trigger pressed - turn left (FIXED AGAIN: swapped back)
-                left_pwm = -trigger_turn_pwm  # -150
-                right_pwm = trigger_turn_pwm  # +150
+                # Left trigger pressed - turn left
+                right_pwm = -trigger_turn_pwm  # Right wheels backward
+                left_pwm = trigger_turn_pwm    # Left wheels forward
             else:
-                # Right trigger pressed - turn right (FIXED AGAIN: swapped back)
-                left_pwm = trigger_turn_pwm   # +150
-                right_pwm = -trigger_turn_pwm # -150
+                # Right trigger pressed - turn right
+                right_pwm = trigger_turn_pwm   # Right wheels forward
+                left_pwm = -trigger_turn_pwm   # Left wheels backward
         else:
             # Normal stick control when no triggers pressed
             # Calculate base forward/backward movement from left stick Y
             forward_pwm = -stick_y * max_pwm  # Invert Y axis
             
-            # Calculate turning component from stick X (FIXED: flipped for correct turning)
-            turn_pwm = -stick_x * max_pwm * 0.7  # Flipped sign and reduce turn sensitivity
+            # Calculate turning component from stick X
+            turn_pwm = -stick_x * max_pwm * 0.7  # Reduce turn sensitivity
             
             # Calculate left and right motor PWM
-            left_pwm = int(forward_pwm + turn_pwm)
-            right_pwm = int(forward_pwm - turn_pwm)
+            right_pwm = int(forward_pwm - turn_pwm)  # Right wheels
+            left_pwm = int(forward_pwm + turn_pwm)   # Left wheels
             
             # Clamp values
-            left_pwm = max(-max_pwm, min(max_pwm, left_pwm))
             right_pwm = max(-max_pwm, min(max_pwm, right_pwm))
+            left_pwm = max(-max_pwm, min(max_pwm, left_pwm))
             
             # Reset to 0 if joystick is centered
             if abs(stick_x) == 0.0 and abs(stick_y) == 0.0:
-                left_pwm = 0
                 right_pwm = 0
+                left_pwm = 0
         
-        # HARDWARE FIX: Remap negative PWM values for correct hardware operation
-        # Hardware expects: -1 = fastest, -255 = slowest (inverted from normal)
-        # ONLY remap first value (right wheels), keep second value (left wheels) unchanged
-        def remap_first_value_only(pwm_value):
-            if pwm_value < 0:
-                # Remap -255 to -1 (fastest) and -1 to -255 (slowest)
-                return -(256 - abs(pwm_value))
-            return pwm_value
-        
-        # Apply remapping ONLY to right wheels (first PWM value)
-        remapped_right = remap_first_value_only(right_pwm)
-        # Keep left wheels unchanged
-        remapped_left = left_pwm
-        
-        # DIRECTIONAL FIX: When both PWM values are positive, swap them
-        if remapped_right > 0 and remapped_left > 0:
-            # Swap for positive values
-            command = f"PWM,{remapped_left},{remapped_right}"
-        else:
-            # Keep normal order for negative values (working correctly)
-            command = f"PWM,{remapped_right},{remapped_left}"
+        # Standard PWM command: PWM,right_wheels,left_wheels (no remapping needed)
+        command = f"PWM,{right_pwm},{left_pwm}"
         
         # ALWAYS send command for immediate response
         self.send_command(command)

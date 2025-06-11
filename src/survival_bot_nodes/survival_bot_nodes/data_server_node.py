@@ -37,12 +37,6 @@ class DataServerNode(Node):
         self.arduino = None
         self.baudrate = 115200
         self.latest_sensor_data = {}
-        self.pending_command = None
-        self.command_start_time = None
-        self.movement_detected = False
-        self.encoder_start_left = 0
-        self.encoder_start_right = 0
-        self.last_encoder_check_time = 0
         
         if self.enable_arduino:
             self.setup_arduino()
@@ -177,9 +171,15 @@ class DataServerNode(Node):
     def read_arduino_data(self):
         """Read sensor data from Arduino"""
         if not self.arduino:
-            # Use fake data if no Arduino
+            # Use fake data if no Arduino - Arduino provides motion status
             self.latest_sensor_data = {
-                "mode": "idle",
+                "imu": {"roll": 0.0, "pitch": 0.0, "yaw": 0.0, "working": False},
+                "encoders": {"left": 0, "right": 0},
+                "current": 0.0,
+                "ldr": {"left": 512, "right": 512},
+                "environment": {"temperature": 25.0, "humidity": 50.0, "pressure": 1013.25, "working": False},
+                "bumpers": {"top": 0, "bottom": 0, "left": 0, "right": 0},
+                "motion": "stop",  # Arduino provides this directly
                 "timestamp": time.time(),
                 "fake": True
             }
@@ -197,6 +197,7 @@ class DataServerNode(Node):
                 if line.startswith('{') and line.endswith('}'):
                     try:
                         sensor_data = json.loads(line)
+                        # Arduino provides motion status directly - no need to calculate
                         self.latest_sensor_data = sensor_data
                         self.latest_sensor_data['timestamp'] = time.time()
                         self.publish_sensor_data()
