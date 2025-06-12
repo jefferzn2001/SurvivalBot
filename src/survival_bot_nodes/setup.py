@@ -32,4 +32,4 @@ setup(
             'camera_viewer_node = survival_bot_nodes.camera_viewer_node:main',
         ],
     },
-)
+) 

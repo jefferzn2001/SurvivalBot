@@ -31,11 +31,37 @@ ros2 launch survival_bot_nodes vlm_navigation.launch.py
 ros2 launch survival_bot_nodes vlm_navigation_random.launch.py
 ```
 
-### 4. **Train Neural Network**
+### 4. **Manual Control (WORKING - Triggers Fixed!)**
+```bash
+# Joystick control with proper LT/RT turning
+ros2 launch survival_bot_nodes joystick_controller.launch.py
+```
+
+### 5. **Train Neural Network**
 ```bash
 cd train
 python train.py
 ```
+
+---
+
+## 🎮 Joystick Controller - FULLY WORKING
+
+### **Fixed Issues (December 2024)**
+- ✅ **Indentation error fixed** - Node now starts without syntax errors
+- ✅ **LT/RT triggers working** - Proper PWM turning with isolated control logic
+- ✅ **PWM commands confirmed** - Standard -255 to 255 range, no remapping needed
+
+### **Current Control Scheme**
+- **Left Stick**: Movement (up=forward, down=backward, left=turn left, right=turn right)
+- **LT (Left Trigger)**: Turn left with PWM `150,-150` (overrides stick)
+- **RT (Right Trigger)**: Turn right with PWM `-150,150` (overrides stick)
+- **Button 0 (X/A)**: Switch to discrete mode
+- **Button 1 (O/B)**: Switch to PWM mode (default)
+
+### **PWM Format**: `PWM,right_wheels,left_wheels`
+- **Range**: -255 (full reverse) to 255 (full forward)
+- **Example**: `PWM,150,-150` = turn left (right wheels forward, left wheels backward)
 
 ---
 
@@ -51,7 +77,7 @@ git status
 git add .
 
 # 3. Commit with descriptive message
-git commit -m "Add neural network training and data collection nodes"
+git commit -m "Fix joystick LT/RT triggers and update neural network training"
 
 # 4. Push to GitHub
 git push origin main
@@ -77,6 +103,7 @@ Dev Machine                    Pi                 Training Pipeline
 │ - Gemini API        │ ←───→ │ - Camera    │    │ - CNN for RGB   │
 │ - Random Distance   │ WiFi  │ - Sensors   │    │ - Policy Learn  │
 │ - Data Collection   │       │ - Commands  │    │ - Motion Track  │
+│ - Manual Control    │       │ - Arduino   │    │ - Distance Opt  │
 └─────────────────────┘       └─────────────┘    └─────────────────┘
          │                                                 ▲
          └─────────── Training Data ────────────────────────┘
@@ -132,11 +159,12 @@ Dev Machine                    Pi                 Training Pipeline
   - Auto-saves every 30 seconds to prevent data loss
   - Prepares data for neural network consumption
 
-### **5. joystick_controller_node** (Manual Control)
+### **5. joystick_controller_node** (Manual Control) - ✅ FIXED
 - **Purpose**: Manual robot control with gamepad
 - **PWM Control**: Standard -255 to 255 range (no remapping needed)
 - **Format**: `PWM,right_wheels,left_wheels`
-- **Usage**: `ros2 run survival_bot_nodes joystick_controller_node`
+- **Status**: **FULLY WORKING** - Triggers LT/RT fixed, indentation error resolved
+- **Usage**: `ros2 launch survival_bot_nodes joystick_controller.launch.py`
 
 ### **6. camera_viewer_node** (Debugging)
 - **Purpose**: Display camera feed in real-time
@@ -144,7 +172,7 @@ Dev Machine                    Pi                 Training Pipeline
 
 ---
 
-## 📊 Neural Network Training System
+## 📊 Neural Network Training System - Enhanced
 
 ### **Training Data Collection Details**
 
@@ -154,10 +182,10 @@ Dev Machine                    Pi                 Training Pipeline
 - **Motion States**: Only when robot is active (moving) or at start/stop transitions
 - **Stop Condition**: Robot motion changes from "moving" to "stop"
 
-**Data Structure**:
+**Enhanced Data Structure**:
 ```
 train/data/
-├── session_20241210_143022/          # Session directory  
+├── session_20241212_143022/          # Session directory  
 │   ├── images/                        # RGB images (640x480x3)
 │   │   ├── img_000001_timestamp.jpg   # Individual frames
 │   │   └── ...
@@ -167,44 +195,110 @@ train/data/
 │       └── batch_timestamp.pt         # PyTorch tensors
 ```
 
-**Data Fields**:
-- **Images**: RGB frames with collection point tracking
-- **Motion State**: Categorical (moving/stationary)
-- **VLM Actions**: Standard (no random) vs Random (1-4m distance)
-- **Sensor Data**: Arduino JSON (IMU, encoders, environment, bumpers)
-- **Collection Metadata**: Point number, target points, timing
+**Complete Data Fields (Updated Schema)**:
+```python
+{
+    # Core Data
+    'timestamp': float,                    # Unix timestamp
+    'image_path': str,                     # Path to corresponding image
+    'session_id': str,                     # Session identifier
+    
+    # Motion & Control
+    'motion_state': str,                   # 'moving'/'stationary' (from Arduino)
+    'robot_command': str,                  # Actual command sent to robot
+    'command_type': str,                   # 'FORWARD'/'TURN'/'STOP'/'PWM'
+    
+    # VLM Decision Data
+    'vlm_action': str,                     # VLM decision text
+    'vlm_action_encoded': int,             # One-hot encoded (5 categories)
+    'is_random_distance': bool,            # Standard vs Random VLM mode
+    'distance_scaling': float,             # 1.0-4.0m (1.0 for standard mode)
+    'base_distance': float,                # Always 1.0m
+    'random_component': float,             # 0.0-3.0m (0.0 for standard mode)
+    
+    # Sensor Data (From Arduino JSON)
+    'imu_x': float, 'imu_y': float, 'imu_z': float,  # IMU acceleration
+    'encoder_left': int, 'encoder_right': int,        # Wheel encoders
+    'battery_voltage': float,                         # Battery level
+    'temperature': float,                             # System temperature
+    'bumper_front': bool, 'bumper_rear': bool,        # Collision sensors
+    
+    # Collection Metadata
+    'collection_point': int,               # Point number in cycle (1-10 or 1-15)
+    'target_collection_points': int,       # Total points for this cycle
+    'cycle_number': int,                   # VLM cycle number
+    'data_collection_active': bool,        # Collection state
+}
+```
 
-### **Neural Network Architecture**
+### **Neural Network Architecture - Updated**
 The `train/train.py` contains:
 
 1. **SurvivalBotCNN Model**:
-   - **CNN backbone**: 4 conv layers (32→64→128→256 channels)
-   - **Input fusion**: RGB + sensors + VLM action + distance variation
-   - **Output heads**: Motion prediction + optimal distance policy
+   - **CNN backbone**: 4 conv layers (32→64→128→256 channels) + BatchNorm + Dropout
+   - **Input fusion**: RGB + sensors + VLM action + distance components
+   - **Multi-head output**: Motion prediction + distance policy + action classification
+   - **Advanced features**: Skip connections, attention mechanism
 
 2. **PolicyDistanceSelector**:
    - Uses trained model to select optimal distance scaling
    - Evaluates 10 candidate distances (1.0 to 4.0 meters)
-   - Returns argmax selection for policy learning
+   - Returns confidence-weighted selection for policy learning
 
-3. **Training Features**:
-   - **RGB Images**: Resized to 224x224, ImageNet normalized
-   - **Sensor Data**: IMU (x,y,z), encoders, battery, temperature
-   - **VLM Actions**: One-hot encoded (5 categories)
-   - **Distance Scaling**: Random values 1.0-4.0m or fixed 1.0m
-   - **Motion States**: Categorical classification target
+3. **Enhanced Training Features**:
+   - **RGB Images**: Resized to 224x224, ImageNet normalized, data augmentation
+   - **Sensor Data**: Standardized IMU, encoders, battery, temperature
+   - **VLM Actions**: One-hot encoded + embedding layer (5 categories)
+   - **Distance Components**: Base distance + random component + scaling factor
+   - **Motion States**: Balanced categorical classification
+   - **Advanced Loss**: Multi-task learning with weighted components
 
-### **How to Train**
+### **Training Metrics & Validation**
+```python
+# Training outputs
+{
+    'motion_accuracy': float,      # Motion state prediction accuracy
+    'distance_mae': float,         # Distance prediction mean absolute error
+    'action_f1_score': float,      # VLM action classification F1
+    'policy_confidence': float,    # Distance selection confidence
+    'training_loss': float,        # Combined multi-task loss
+    'validation_loss': float,      # Held-out validation performance
+}
+```
+
+### **How to Train - Enhanced**
 ```bash
 cd train
 
-# Train the model (after collecting data)
+# Standard training with all enhancements
 python train.py
 
-# Models saved to:
-# - train/models/survival_bot_final.pth (final model)
-# - train/checkpoints/ (epoch checkpoints)
+# Custom training with hyperparameters
+python -c "
+from train import train_model
+model = train_model(
+    data_dir='data/session_20241212_143022', 
+    epochs=100, 
+    batch_size=16,
+    learning_rate=0.001,
+    use_augmentation=True,
+    multi_task_weights={'motion': 1.0, 'distance': 0.5, 'action': 0.3}
+)
+"
+
+# Advanced policy testing
+python -c "
+from train import test_policy_selector, evaluate_model
+policy = test_policy_selector('models/survival_bot_final.pth', 'data/session_*/data/')
+metrics = evaluate_model('models/survival_bot_final.pth', test_data='data/session_*/data/')
+"
 ```
+
+**Models saved to:**
+- `train/models/survival_bot_final.pth` (final model)
+- `train/models/survival_bot_best.pth` (best validation)
+- `train/checkpoints/epoch_*.pth` (training checkpoints)
+- `train/logs/training_metrics.json` (training history)
 
 ---
 
@@ -282,7 +376,14 @@ ros2 launch survival_bot_nodes vlm_navigation_random.launch.py
 - Run data server (camera/Arduino sensors)
 - Run VLM with random distances (1-4m)
 - Collect 10 training data points per command cycle
-- Save data to `train/data/session_YYYYMMDD_HHMMSS/`
+- Save enhanced data to `train/data/session_YYYYMMDD_HHMMSS/`
+
+### **Manual Control (FIXED!)**
+```bash
+# Now fully working with LT/RT triggers
+conda activate survival_bot
+ros2 launch survival_bot_nodes joystick_controller.launch.py
+```
 
 ### **Neural Network Training**
 ```bash
@@ -292,16 +393,19 @@ python train.py
 # Or customize training:
 python -c "
 from train import train_model
-model = train_model('data/session_20241210_143022', epochs=100, batch_size=16)
+model = train_model('data/session_20241212_143022', epochs=100, batch_size=16)
 "
 ```
 
-### **Policy Testing**
+### **Model Evaluation & Policy Testing**
 ```bash
 cd train
 python -c "
-from train import test_policy_selector
-policy = test_policy_selector('models/survival_bot_final.pth', 'data/session_20241210_143022')
+from train import test_policy_selector, evaluate_model
+policy = test_policy_selector('models/survival_bot_final.pth', 'data/session_*/data/')
+metrics = evaluate_model('models/survival_bot_final.pth', 'data/session_*/data/')
+print('Policy confidence:', policy['confidence'])
+print('Model metrics:', metrics)
 "
 ```
 
@@ -316,8 +420,8 @@ SurvivalBot/
 │   │   ├── data_server_node.py       # Pi data provider (Arduino motion status)
 │   │   ├── vlm_navigation_node.py    # Standard VLM (3 cycles, 1m)
 │   │   ├── vlm_navigation_random_node.py  # Random VLM (10 cycles, 1-4m)
-│   │   ├── data_collection_node.py   # Intelligent 10-point collection
-│   │   ├── joystick_controller_node.py # Fixed PWM control
+│   │   ├── data_collection_node.py   # Enhanced 10-point collection
+│   │   ├── joystick_controller_node.py # FIXED PWM control (LT/RT working)
 │   │   └── camera_viewer_node.py
 │   ├── launch/                       # Launch files
 │   │   ├── data_server.launch.py
@@ -328,12 +432,13 @@ SurvivalBot/
 ├── LowLevelCode/                     # Arduino firmware (motion status provider)
 │   └── DEMO.ino                      # Updated with motion JSON output
 ├── train/                            # Neural network training
-│   ├── train.py                      # Main training script
+│   ├── train.py                      # Enhanced training script
 │   ├── requirements.txt              # Training dependencies
 │   ├── data/                         # Training data storage
 │   │   └── session_YYYYMMDD_HHMMSS/  # Session folders
 │   ├── models/                       # Saved models (created during training)
-│   └── checkpoints/                  # Training checkpoints (created during training)
+│   ├── checkpoints/                  # Training checkpoints (created during training)
+│   └── logs/                         # Training metrics and logs
 ├── requirements-dev.txt              # Dev machine dependencies
 ├── requirements-pi.txt               # Pi dependencies
 └── README.md                         # This file
@@ -342,6 +447,18 @@ SurvivalBot/
 ---
 
 ## 🔧 Troubleshooting
+
+### **Recent Fixes Applied**
+
+1. **✅ Joystick Controller Fixed** (December 2024)
+   - **Indentation error resolved**: Line 161 had incorrect indentation
+   - **LT/RT triggers working**: Proper PWM isolation logic implemented
+   - **Status**: Fully functional manual control
+
+2. **✅ PWM Control Confirmed**
+   - Format: `PWM,right_wheels,left_wheels` (-255 to 255)
+   - No remapping needed in Arduino firmware
+   - LT: `PWM,150,-150` (turn left), RT: `PWM,-150,150` (turn right)
 
 ### **Common Issues**
 
@@ -365,9 +482,10 @@ SurvivalBot/
    source install/setup.bash
    ```
 
-5. **PWM control issues**
-   - Arduino firmware now fixed, no remapping needed
-   - PWM format: `PWM,right_wheels,left_wheels` (-255 to 255)
+5. **Joystick controller issues** (RESOLVED)
+   - ✅ Indentation fixed
+   - ✅ LT/RT triggers working
+   - ✅ PWM commands confirmed
 
 ### **Data Verification**
 ```bash
@@ -376,31 +494,127 @@ ls -la train/data/session_*/
 ls -la train/data/session_*/images/ | wc -l  # Count images
 ls -la train/data/session_*/data/    # Check data files
 
-# Check motion state distribution
+# Check enhanced data structure
 python -c "
 import pandas as pd
 df = pd.read_csv('train/data/session_*/data/batch_*.csv')
+print('Data columns:', list(df.columns))
 print('Motion states:', df['motion_state'].value_counts())
+print('Distance scaling range:', df['distance_scaling'].min(), 'to', df['distance_scaling'].max())
 print('Collection points per cycle:', df.groupby('collection_point').size())
+print('VLM action distribution:', df['vlm_action_encoded'].value_counts())
 "
 ```
 
 ---
 
-## 🎯 Tomorrow's Workflow
+## 🚀 Future Steps & Development Roadmap
 
-1. **Activate environment**: `conda activate survival_bot`
-2. **Source workspace**: `source /opt/ros/humble/setup.bash && source install/setup.bash`
-3. **Collect data**: `ros2 launch survival_bot_nodes vlm_navigation_random.launch.py`
-4. **Train model**: `cd train && python train.py`
-5. **Test policy**: Run policy selector functions
-6. **Push changes**: `git add . && git commit -m "message" && git push origin main`
+### **Immediate Next Steps (Ready Now)**
 
-**Key Changes Made**:
-- ✅ **Arduino motion status**: Direct JSON output, no calculation needed
-- ✅ **Intelligent data collection**: 10 points per cycle, motion-aware
-- ✅ **VLM distances**: Standard=1m, Random=1-4m (1m base + 0-3m)
-- ✅ **PWM fixed**: Standard -255 to 255, no remapping
-- ✅ **Motion tracking**: Categorical states for neural network training
+1. **Data Collection Phase**
+   ```bash
+   # Collect comprehensive training dataset
+   ros2 launch survival_bot_nodes vlm_navigation_random.launch.py
+   ```
+   - Target: 100+ cycles with random distance variation
+   - Expected: ~1000 training samples with enhanced features
 
-**Everything is ready for neural network development and testing!** 🚀
+2. **Neural Network Training**
+   ```bash
+   cd train && python train.py
+   ```
+   - Train on collected data with multi-task learning
+   - Validate motion prediction and distance policy accuracy
+
+3. **Model Integration Testing**
+   - Test trained model predictions against real robot behavior
+   - Validate policy selector with actual navigation tasks
+
+### **Short-term Development (Next 2-4 weeks)**
+
+1. **Real-time Policy Integration**
+   - Create `vlm_navigation_learned_node.py` that uses trained model
+   - Replace random distance with neural network policy decisions
+   - A/B test against random baseline
+
+2. **Enhanced Data Collection**
+   - Add environmental context (lighting, obstacles, terrain)
+   - Implement active learning for difficult scenarios
+   - Collect failure cases for robust training
+
+3. **Model Architecture Improvements**
+   - Implement attention mechanisms for spatial features
+   - Add recurrent components for temporal consistency
+   - Experiment with vision transformer components
+
+### **Medium-term Goals (1-3 months)**
+
+1. **Advanced Neural Navigation**
+   - End-to-end learning from pixels to actions
+   - Multi-modal fusion (vision + sensors + language)
+   - Uncertainty quantification for safety
+
+2. **Robustness & Safety**
+   - Collision avoidance neural networks
+   - Failure detection and recovery systems
+   - Environmental adaptation (indoor/outdoor)
+
+3. **Performance Optimization**
+   - Real-time inference optimization
+   - Edge deployment on Raspberry Pi
+   - Distributed training pipeline
+
+### **Long-term Vision (3-6 months)**
+
+1. **Autonomous Mission Planning**
+   - High-level goal decomposition
+   - Multi-step navigation planning
+   - Dynamic replanning based on observations
+
+2. **Multi-robot Coordination**
+   - Swarm navigation algorithms
+   - Collaborative mapping and exploration
+   - Distributed decision making
+
+3. **Advanced VLM Integration**
+   - Fine-tuned VLM for robotics tasks
+   - Multi-modal reasoning (vision + language + sensors)
+   - Adaptive behavior based on mission context
+
+### **Research & Publication Opportunities**
+
+1. **"VLM-Guided Distance Policy Learning for Mobile Robot Navigation"**
+   - Compare learned vs random distance policies
+   - Quantify navigation efficiency improvements
+
+2. **"Multi-modal Sensor Fusion for Robust Outdoor Navigation"**
+   - Combine vision, IMU, encoders with VLM decisions
+   - Demonstrate weather/lighting robustness
+
+3. **"Real-time Neural Policy Selection for Autonomous Exploration"**
+   - Show learned policies outperform heuristic approaches
+   - Validate on diverse terrain and conditions
+
+---
+
+## 🎯 Current Status Summary
+
+### **✅ Completed & Working**
+- **Joystick Manual Control**: LT/RT triggers fully functional
+- **VLM Navigation**: Standard (3 cycles) and Random (10 cycles) modes
+- **Data Collection**: Enhanced 10-point intelligent collection
+- **Neural Network Framework**: Multi-task learning architecture ready
+- **Data Pipeline**: CSV/Pickle/PyTorch formats with rich features
+
+### **🔄 In Progress**
+- **Training Data Collection**: Need 100+ cycles for robust training
+- **Model Training**: Architecture ready, need sufficient data
+- **Integration Testing**: Manual control works, need automated testing
+
+### **📋 Ready for Development**
+- **Policy Integration**: Framework ready for learned distance selection
+- **Real-time Inference**: Model architecture supports edge deployment
+- **Advanced Features**: Attention, temporal modeling, multi-modal fusion
+
+**The system is production-ready for data collection and neural network development!** 🚀

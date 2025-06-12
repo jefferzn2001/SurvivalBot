@@ -137,23 +137,27 @@ class JoystickControllerNode(Node):
                 # Right trigger pressed - turn right (right wheels slower/backward, left wheels faster/forward)
                 right_pwm = -trigger_turn_pwm  # Right wheels backward (-150)
                 left_pwm = trigger_turn_pwm    # Left wheels forward (150)
+                
+            # Clamp trigger values
+            right_pwm = max(-max_pwm, min(max_pwm, right_pwm))
+            left_pwm = max(-max_pwm, min(max_pwm, left_pwm))
         else:
             # Normal stick control when no triggers pressed
             # Calculate base forward/backward movement from left stick Y
             forward_pwm = -stick_y * max_pwm  # Invert Y axis (up = forward)
-            
+        
             # Calculate turning component from stick X
             # FIXED: When stick goes left (negative), we want to turn left
             # Left turn = left wheels slower, right wheels faster
             turn_pwm = stick_x * max_pwm * 0.7  # Remove negative sign to fix direction
-            
+        
             # Calculate left and right motor PWM - FIXED LOGIC
             # When stick_x is negative (left), turn_pwm is negative
             # right_pwm gets MORE power (forward_pwm - negative = forward_pwm + positive)
             # left_pwm gets LESS power (forward_pwm + negative = forward_pwm - positive)
             right_pwm = int(forward_pwm - turn_pwm)  # Right wheels
             left_pwm = int(forward_pwm + turn_pwm)   # Left wheels
-            
+        
             # Clamp values
             right_pwm = max(-max_pwm, min(max_pwm, right_pwm))
             left_pwm = max(-max_pwm, min(max_pwm, left_pwm))

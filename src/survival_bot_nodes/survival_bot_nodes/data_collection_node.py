@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Data Collection Node - Continuous training data collection with event detection
-Records at 10Hz continuously, 20Hz for 2 seconds when bumpers activate
+VLM-Triggered Data Collection Node - Records one dataset per VLM action
+Dataset includes: image, action (1-5), random_distance (-1 to 3), bumper_event, total_current, final_current, encoder_movement, IMU data, environmental data
+VLM reasoning saved separately in session directory
 """
 
 import rclpy
@@ -16,80 +17,87 @@ from datetime import datetime
 from std_msgs.msg import String
 from sensor_msgs.msg import CompressedImage
 
-try:
-    import torch
-    import pickle
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
-    print("⚠️ PyTorch not available - will save as pickle instead")
-
 class DataCollectionNode(Node):
     def __init__(self):
         super().__init__('data_collection_node')
         
         # Parameters
-        self.declare_parameter('output_dir', './train/data')
+        self.declare_parameter('vlm_triggered_mode', True)
+        self.declare_parameter('output_dir', './train')
+        self.declare_parameter('session_name', 'vlm_session')
+        self.declare_parameter('vlm_session_dir', '')  # Shared VLM session directory
         
+        self.vlm_triggered_mode = self.get_parameter('vlm_triggered_mode').value
         self.output_dir = self.get_parameter('output_dir').value
+        self.session_name = self.get_parameter('session_name').value
+        self.vlm_session_dir = self.get_parameter('vlm_session_dir').value
         
-        # Setup output directory
+        # Setup simplified output structure - single directory for everything
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.session_dir = f"{self.output_dir}/session_{timestamp}"
-        os.makedirs(f"{self.session_dir}/images", exist_ok=True)
-        os.makedirs(f"{self.session_dir}/data", exist_ok=True)
         
-        # Single CSV file for continuous data
-        self.csv_file_path = f"{self.session_dir}/data/continuous_data.csv"
+        # Use shared VLM session directory if provided, otherwise create default
+        if not self.vlm_session_dir:
+            self.session_dir = f"./data_{self.session_name}_{timestamp}"
+        else:
+            self.session_dir = self.vlm_session_dir
+        
+        # Create single session directory with subdirectories
+        os.makedirs(f"{self.session_dir}/images", exist_ok=True)
+        os.makedirs(f"{self.session_dir}/annotated", exist_ok=True)
+        
+        # Single CSV file for entire session
+        self.csv_file_path = f"{self.session_dir}/dataset.csv"
         self.csv_initialized = False
         
-        # Data storage
-        self.data_counter = 0
+        # Reasoning CSV file for entire session
+        self.reasoning_csv_path = f"{self.session_dir}/reasoning.csv"
+        self.reasoning_csv_initialized = False
         
-        # Latest data
+        # Data collection state
+        self.dataset_counter = 0
+        self.collecting = False  # True when monitoring action execution
+        self.action_start_time = None
+        self.current_dataset = {}
+        
+        # Latest sensor data
         self.latest_image = None
         self.latest_sensor_data = None
-        self.latest_vlm_action = None
-        self.latest_command = None
         
-        # Recording frequencies
-        self.base_frequency = 10.0  # 10 Hz
-        self.rapid_frequency = 20.0  # 20 Hz for events
-        self.current_frequency = self.base_frequency
+        # Bumper monitoring during action
+        self.bumper_event_detected = "none"
+        self.bumper_detected_first = None
         
-        # Bumper event detection
-        self.rapid_recording = False
-        self.rapid_start_time = None
-        self.rapid_duration = 2.0  # 2 seconds of rapid recording
-        self.last_bumper_state = {'top': 0, 'bottom': 0, 'left': 0, 'right': 0}
+        # Current monitoring for filtering
+        self.current_readings = []
+        self.current_monitoring_start = None
         
-        # Motion tracking
-        self.last_motion_state = "stop"
+        # Encoder tracking
+        self.encoder_start_values = {"left": 0, "right": 0}
+        self.encoder_movement = {"left": 0, "right": 0}
         
         # ROS2 Subscriptions
         self.image_sub = self.create_subscription(
             CompressedImage, 'robot/camera/compressed', self.image_callback, 10)
         self.sensor_sub = self.create_subscription(
             String, 'robot/sensor_data', self.sensor_callback, 10)
-        self.command_sub = self.create_subscription(
-            String, 'robot/command', self.command_callback, 10)
         
-        # VLM decision subscription (custom topic for VLM decisions)
+        # VLM decision subscription - triggers data collection
         self.vlm_decision_sub = self.create_subscription(
             String, 'vlm/decision', self.vlm_decision_callback, 10)
         
-        # Publishers for VLM decisions (so VLM nodes can publish their decisions)
-        self.vlm_decision_pub = self.create_publisher(String, 'vlm/decision', 10)
+        # Action status subscription - monitors action execution
+        self.action_status_sub = self.create_subscription(
+            String, 'vlm/action_status', self.action_status_callback, 10)
         
-        # Timer for continuous data collection (starts at 10Hz)
-        self.collection_timer = self.create_timer(1.0 / self.base_frequency, self.collect_data_continuous)
+        # Final current reading subscription - triggers dataset completion
+        self.final_current_sub = self.create_subscription(
+            String, 'vlm/final_current', self.final_current_callback, 10)
         
-        self.get_logger().info("📊 Continuous Data Collection Node Started")
-        self.get_logger().info(f"   Output: {self.session_dir}")
-        self.get_logger().info(f"   Strategy: Continuous recording at {self.base_frequency}Hz")
-        self.get_logger().info(f"   Rapid mode: {self.rapid_frequency}Hz for {self.rapid_duration}s on bumper events")
-        self.get_logger().info(f"   PyTorch: {'✅' if TORCH_AVAILABLE else '❌'}")
-        self.get_logger().info(f"   Single CSV: {self.csv_file_path}")
+        self.get_logger().info("📊 VLM-Triggered Data Collection Node Started")
+        self.get_logger().info(f"   Session Directory: {self.session_dir}")
+        self.get_logger().info(f"   Dataset CSV: {self.csv_file_path}")
+        self.get_logger().info(f"   Session: {self.session_name}")
+        self.get_logger().info(f"   Recording: image, action, random_distance, bumper_event, current_data, encoders, IMU, environment")
     
     def image_callback(self, msg):
         """Store latest camera image"""
@@ -102,253 +110,316 @@ class DataCollectionNode(Node):
             self.get_logger().error(f"Image decode failed: {e}")
     
     def sensor_callback(self, msg):
-        """Store latest sensor data and detect bumper events"""
+        """Store latest sensor data and monitor for bumper events during action"""
         try:
             self.latest_sensor_data = json.loads(msg.data)
             
-            # Track motion state changes
-            current_motion = self.latest_sensor_data.get('motion', 'stop')
-            if self.last_motion_state != current_motion:
-                self.last_motion_state = current_motion
-            
-            # Check for bumper events
-            current_bumpers = self.latest_sensor_data.get('bumpers', {})
-            bumper_activated = False
-            
-            for bumper in ['top', 'bottom', 'left', 'right']:
-                current_state = current_bumpers.get(bumper, 0)
-                last_state = self.last_bumper_state.get(bumper, 0)
-                
-                # Detect bumper activation (0 -> 1 transition)
-                if current_state == 1 and last_state == 0:
-                    bumper_activated = True
-                    self.get_logger().info(f"🚨 BUMPER EVENT: {bumper} bumper activated!")
-                    break
-            
-            # Update last bumper state
-            self.last_bumper_state = current_bumpers.copy()
-            
-            # Start rapid recording if bumper activated
-            if bumper_activated:
-                self.start_rapid_recording()
+            # Monitor bumper events only during action execution
+            if self.collecting:
+                self.monitor_bumper_events()
+                self.monitor_current_readings()
                 
         except Exception as e:
             self.get_logger().error(f"Sensor data parse failed: {e}")
     
-    def command_callback(self, msg):
-        """Store latest robot command"""
-        self.latest_command = msg.data
+    def monitor_bumper_events(self):
+        """Monitor for bumper events during action execution"""
+        if not self.latest_sensor_data:
+            return
+            
+        bumpers = self.latest_sensor_data.get('bumpers', {})
+        
+        # Check for any bumper activation (only record first one)
+        if self.bumper_event_detected == "none":
+            for bumper_name, value in bumpers.items():
+                if value == 1:  # Bumper activated
+                    self.bumper_event_detected = bumper_name
+                    self.get_logger().info(f"🚨 Bumper event detected: {bumper_name}")
+                    break
+    
+    def monitor_current_readings(self):
+        """Monitor current readings during action for total current calculation"""
+        if not self.latest_sensor_data:
+            return
+            
+        current_value = self.latest_sensor_data.get('current', 0.0)
+        
+        # Filter out negative values and collect readings
+        if current_value >= 0:
+            self.current_readings.append(current_value)
     
     def vlm_decision_callback(self, msg):
-        """Store latest VLM decision"""
+        """VLM decision received - start new dataset collection"""
         try:
             vlm_data = json.loads(msg.data)
-            self.latest_vlm_action = vlm_data
+            
+            if self.latest_image is None:
+                self.get_logger().warning("⏳ No camera image available for VLM decision")
+                return
+            
+            # Start new dataset
+            self.dataset_counter += 1
+            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+            
+            # Capture sensor state at moment of VLM decision
+            decision_sensor_data = self.capture_decision_sensor_data()
+            
+            self.current_dataset = {
+                'dataset_id': self.dataset_counter,
+                'timestamp': datetime.now().isoformat(),
+                'action': vlm_data.get('action', 0),
+                'random_distance': vlm_data.get('random_distance', 0.0),
+                'image_path': None,
+                'timestamp_str': timestamp_str,
+                # Sensor data at VLM decision moment
+                'imu_roll': decision_sensor_data['imu_roll'],
+                'imu_pitch': decision_sensor_data['imu_pitch'],
+                'temperature': decision_sensor_data['temperature'],
+                'pressure': decision_sensor_data['pressure'],
+                'humidity': decision_sensor_data['humidity']
+            }
+            
+            # Save VLM reasoning to file in session directory
+            reasoning = vlm_data.get('reasoning', '')
+            if reasoning:
+                self.save_vlm_reasoning(reasoning, timestamp_str)
+            
+            # Save the image at moment of VLM decision
+            self.save_vlm_decision_image()
+            
+            # Reset monitoring state and record starting encoder values
+            self.bumper_event_detected = "none"
+            self.current_readings = []
+            self.record_encoder_start()
+            
+            self.get_logger().info(f"📸 Dataset #{self.dataset_counter} started - Action: {self.current_dataset['action']}, Random Distance: {self.current_dataset['random_distance']}")
+            self.get_logger().info(f"   IMU: R{decision_sensor_data['imu_roll']:.2f}°, P{decision_sensor_data['imu_pitch']:.2f}°")
+            self.get_logger().info(f"   Env: T{decision_sensor_data['temperature']:.1f}°C, H{decision_sensor_data['humidity']:.1f}%, P{decision_sensor_data['pressure']:.1f}hPa")
+            
         except Exception as e:
             self.get_logger().error(f"VLM decision parse failed: {e}")
     
-    def start_rapid_recording(self):
-        """Start rapid recording mode for bumper events"""
-        if not self.rapid_recording:
-            self.rapid_recording = True
-            self.rapid_start_time = time.time()
-            
-            # Switch to rapid frequency
-            self.current_frequency = self.rapid_frequency
-            self.collection_timer.cancel()
-            self.collection_timer = self.create_timer(1.0 / self.rapid_frequency, self.collect_data_continuous)
-            
-            self.get_logger().info(f"🚀 Started rapid recording at {self.rapid_frequency}Hz for {self.rapid_duration}s")
-    
-    def check_rapid_recording_timeout(self):
-        """Check if rapid recording should end"""
-        if self.rapid_recording and self.rapid_start_time is not None:
-            elapsed_time = time.time() - self.rapid_start_time
-            if elapsed_time >= self.rapid_duration:
-                # End rapid recording
-                self.rapid_recording = False
-                self.current_frequency = self.base_frequency
-                
-                # Switch back to base frequency
-                self.collection_timer.cancel()
-                self.collection_timer = self.create_timer(1.0 / self.base_frequency, self.collect_data_continuous)
-                
-                self.get_logger().info(f"📊 Returned to normal recording at {self.base_frequency}Hz")
-    
-    def collect_data_continuous(self):
-        """Continuous data collection at current frequency"""
-        # Check if rapid recording should timeout
-        self.check_rapid_recording_timeout()
-        
-        # Only collect if we have both image and sensor data
-        if self.latest_image is None or self.latest_sensor_data is None:
-            return
-        
-        try:
-            # Save image
-            timestamp = datetime.now()
-            timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S_%f")[:-3]
-            image_filename = f"img_{self.data_counter:06d}_{timestamp_str}.jpg"
-            image_path = f"{self.session_dir}/images/{image_filename}"
-            cv2.imwrite(image_path, self.latest_image)
-            
-            # Determine motion state and collection type
-            current_motion = self.latest_sensor_data.get('motion', 'stop')
-            motion_category = "moving" if current_motion == "moving" else "stationary"
-            
-            # Determine collection type
-            if self.rapid_recording:
-                collection_type = "rapid_event"
-            else:
-                collection_type = "continuous"
-            
-            # Check if any bumper is currently activated
-            bumpers = self.latest_sensor_data.get('bumpers', {})
-            bumper_active = any(bumpers.get(b, 0) == 1 for b in ['top', 'bottom', 'left', 'right'])
-            
-            # Prepare CLEAN data point (only essential fields)
-            data_point = {
-                'timestamp': timestamp.isoformat(),
-                'data_id': self.data_counter,
-                'image_filename': image_filename,
-                'motion_state': motion_category,  # Categorical: moving/stationary
-                'collection_type': collection_type,  # continuous/rapid_event
-                'recording_frequency': self.current_frequency,
-                'bumper_event_active': bumper_active,  # Boolean flag for current bumper state
-                
-                # Essential sensor data only
-                'sensor_imu_roll': self.latest_sensor_data.get('imu', {}).get('roll', 0.0),
-                'sensor_imu_pitch': self.latest_sensor_data.get('imu', {}).get('pitch', 0.0),
-                'sensor_imu_yaw': self.latest_sensor_data.get('imu', {}).get('yaw', 0.0),
-                'sensor_encoders_left': self.latest_sensor_data.get('encoders', {}).get('left', 0),
-                'sensor_encoders_right': self.latest_sensor_data.get('encoders', {}).get('right', 0),
-                'sensor_current': self.latest_sensor_data.get('current', 0.0),
-                'sensor_ldr_left': self.latest_sensor_data.get('ldr', {}).get('left', 512),
-                'sensor_ldr_right': self.latest_sensor_data.get('ldr', {}).get('right', 512),
-                'sensor_environment_temperature': self.latest_sensor_data.get('environment', {}).get('temperature', 25.0),
-                'sensor_environment_humidity': self.latest_sensor_data.get('environment', {}).get('humidity', 50.0),
-                'sensor_environment_pressure': self.latest_sensor_data.get('environment', {}).get('pressure', 1013.25),
-                'sensor_bumpers_top': self.latest_sensor_data.get('bumpers', {}).get('top', 0),
-                'sensor_bumpers_bottom': self.latest_sensor_data.get('bumpers', {}).get('bottom', 0),
-                'sensor_bumpers_left': self.latest_sensor_data.get('bumpers', {}).get('left', 0),
-                'sensor_bumpers_right': self.latest_sensor_data.get('bumpers', {}).get('right', 0),
-            }
-            
-            # Save to continuous CSV file
-            self.save_to_csv(data_point)
-            
-            self.data_counter += 1
-            
-            # Log periodically (every 50 samples to avoid spam)
-            if self.data_counter % 50 == 0:
-                mode = "RAPID" if self.rapid_recording else "NORMAL"
-                self.get_logger().info(f"📊 Collected {self.data_counter} samples [{mode} {self.current_frequency}Hz] ({motion_category})")
-            
-        except Exception as e:
-            self.get_logger().error(f"Data collection failed: {e}")
-    
-    def save_to_csv(self, data_point):
-        """Save single data point to continuous CSV file"""
-        try:
-            df = pd.DataFrame([data_point])
-            
-            # Initialize CSV file with headers if first time
-            if not self.csv_initialized:
-                df.to_csv(self.csv_file_path, mode='w', header=True, index=False)
-                self.csv_initialized = True
-                self.get_logger().info(f"📁 Initialized CSV file: {self.csv_file_path}")
-            else:
-                # Append to existing file
-                df.to_csv(self.csv_file_path, mode='a', header=False, index=False)
-            
-        except Exception as e:
-            self.get_logger().error(f"CSV save failed: {e}")
-    
-    def publish_vlm_decision(self, action, distance=None, reasoning=""):
-        """Helper method for VLM nodes to publish their decisions"""
+    def capture_decision_sensor_data(self):
+        """Capture IMU and environmental data at moment of VLM decision"""
         decision_data = {
-            'action': action,
-            'distance': distance,
-            'reasoning': reasoning,
-            'timestamp': datetime.now().isoformat()
+            'imu_roll': 0.0,
+            'imu_pitch': 0.0,
+            'temperature': 25.0,
+            'pressure': 1013.25,
+            'humidity': 50.0
         }
         
-        msg = String()
-        msg.data = json.dumps(decision_data)
-        self.vlm_decision_pub.publish(msg)
-
-    def save_final_summary(self):
-        """Save final summary and backup files on shutdown"""
+        if self.latest_sensor_data:
+            # Extract IMU data
+            imu_data = self.latest_sensor_data.get('imu', {})
+            decision_data['imu_roll'] = imu_data.get('roll', 0.0)
+            decision_data['imu_pitch'] = imu_data.get('pitch', 0.0)
+            
+            # Extract environmental data
+            env_data = self.latest_sensor_data.get('environment', {})
+            decision_data['temperature'] = env_data.get('temperature', 25.0)
+            decision_data['pressure'] = env_data.get('pressure', 1013.25)
+            decision_data['humidity'] = env_data.get('humidity', 50.0)
+        
+        return decision_data
+    
+    def action_status_callback(self, msg):
+        """Action status updates - start/stop monitoring"""
         try:
-            if not os.path.exists(self.csv_file_path):
-                return
+            status_data = json.loads(msg.data)
+            status = status_data.get('status', '')
+            
+            if status == 'action_started':
+                self.collecting = True
+                self.action_start_time = time.time()
+                self.current_monitoring_start = time.time()
+                self.get_logger().info("🚀 Action started - monitoring bumpers, current, and encoders")
                 
-            # Load the full dataset
-            df = pd.read_csv(self.csv_file_path)
+            elif status == 'action_completed':
+                self.collecting = False
+                
+                # Calculate total current drawn (sum of filtered readings)
+                total_current = sum(self.current_readings) if self.current_readings else 0.0
+                
+                # Calculate encoder movement before they get cleared
+                self.calculate_encoder_movement()
+                
+                # Update dataset with monitoring results
+                self.current_dataset['bumper_event'] = self.bumper_event_detected
+                self.current_dataset['total_current'] = total_current
+                self.current_dataset['current_samples'] = len(self.current_readings)
+                self.current_dataset['encoder_left'] = self.encoder_movement['left']
+                self.current_dataset['encoder_right'] = self.encoder_movement['right']
+                
+                self.get_logger().info(f"✅ Action completed - Bumper: {self.bumper_event_detected}, Total Current: {total_current:.3f}, Encoders: L{self.encoder_movement['left']}, R{self.encoder_movement['right']}")
+                
+        except Exception as e:
+            self.get_logger().error(f"Action status parse failed: {e}")
+    
+    def final_current_callback(self, msg):
+        """Final current reading - complete the dataset"""
+        try:
+            final_data = json.loads(msg.data)
+            final_current = final_data.get('final_current', 0.0)
             
-            # Create summary statistics
-            summary = {
-                'total_samples': len(df),
-                'session_duration': (pd.to_datetime(df['timestamp'].iloc[-1]) - pd.to_datetime(df['timestamp'].iloc[0])).total_seconds(),
-                'motion_states': df['motion_state'].value_counts().to_dict(),
-                'collection_types': df['collection_type'].value_counts().to_dict(),
-                'bumper_events': df['bumper_event_active'].sum(),
-                'rapid_recordings': len(df[df['collection_type'] == 'rapid_event']),
-                'frequencies_used': df['recording_frequency'].value_counts().to_dict(),
-            }
+            # Complete the dataset
+            self.current_dataset['final_current'] = final_current
             
-            # Save summary
-            summary_path = f"{self.session_dir}/data/session_summary.json"
-            with open(summary_path, 'w') as f:
-                json.dump(summary, f, indent=2)
+            # Save dataset to CSV
+            self.save_dataset_to_csv()
             
-            # Save backup as pickle
-            pickle_path = f"{self.session_dir}/data/continuous_data.pkl"
-            df.to_pickle(pickle_path)
-            
-            # Save as PyTorch if available
-            if TORCH_AVAILABLE:
-                torch_path = f"{self.session_dir}/data/continuous_data.pt"
-                torch.save({
-                    'dataframe': df,
-                    'summary': summary,
-                    'metadata': {
-                        'session_dir': self.session_dir,
-                        'collection_strategy': 'continuous_with_event_detection',
-                        'base_frequency': self.base_frequency,
-                        'rapid_frequency': self.rapid_frequency,
-                        'rapid_duration': self.rapid_duration,
-                        'tensor_ready': True
-                    }
-                }, torch_path)
-            
-            self.get_logger().info(f"💾 Final save complete:")
-            self.get_logger().info(f"   Total samples: {summary['total_samples']}")
-            self.get_logger().info(f"   Duration: {summary['session_duration']:.1f}s")
-            self.get_logger().info(f"   Motion states: {summary['motion_states']}")
-            self.get_logger().info(f"   Bumper events: {summary['bumper_events']}")
-            self.get_logger().info(f"   Rapid recordings: {summary['rapid_recordings']}")
-            self.get_logger().info(f"   CSV: {self.csv_file_path}")
-            self.get_logger().info(f"   Summary: {summary_path}")
+            self.get_logger().info(f"💾 Dataset #{self.dataset_counter} completed - Final Current: {final_current:.3f}")
             
         except Exception as e:
-            self.get_logger().error(f"Final save failed: {e}")
+            self.get_logger().error(f"Final current parse failed: {e}")
+    
+    def record_encoder_start(self):
+        """Record encoder values at start of action"""
+        if self.latest_sensor_data:
+            encoders = self.latest_sensor_data.get('encoders', {"left": 0, "right": 0})
+            self.encoder_start_values = {
+                "left": encoders.get('left', 0),
+                "right": encoders.get('right', 0)
+            }
+            self.get_logger().info(f"📏 Encoder start: L{self.encoder_start_values['left']}, R{self.encoder_start_values['right']}")
+    
+    def calculate_encoder_movement(self):
+        """Calculate encoder movement during action (before they get cleared)"""
+        if self.latest_sensor_data:
+            current_encoders = self.latest_sensor_data.get('encoders', {"left": 0, "right": 0})
+            self.encoder_movement = {
+                "left": current_encoders.get('left', 0) - self.encoder_start_values['left'],
+                "right": current_encoders.get('right', 0) - self.encoder_start_values['right']
+            }
+        else:
+            self.encoder_movement = {"left": 0, "right": 0}
+    
+    def save_vlm_reasoning(self, reasoning, timestamp_str):
+        """Save VLM reasoning to CSV file as new row"""
+        try:
+            reasoning_data = {
+                'dataset_id': self.dataset_counter,
+                'timestamp': datetime.now().isoformat(),
+                'action': self.current_dataset['action'],
+                'random_distance': self.current_dataset['random_distance'],
+                'imu_roll': self.current_dataset['imu_roll'],
+                'imu_pitch': self.current_dataset['imu_pitch'],
+                'temperature': self.current_dataset['temperature'],
+                'humidity': self.current_dataset['humidity'],
+                'pressure': self.current_dataset['pressure'],
+                'reasoning': reasoning
+            }
+            
+            # Initialize reasoning CSV if first entry
+            if not self.reasoning_csv_initialized:
+                df = pd.DataFrame([reasoning_data])
+                df.to_csv(self.reasoning_csv_path, index=False)
+                self.reasoning_csv_initialized = True
+                self.get_logger().info(f"📄 Reasoning CSV initialized: {self.reasoning_csv_path}")
+            else:
+                # Append to existing reasoning CSV
+                df = pd.DataFrame([reasoning_data])
+                df.to_csv(self.reasoning_csv_path, mode='a', header=False, index=False)
+            
+            self.get_logger().info(f"💭 VLM reasoning saved to CSV: Dataset {self.dataset_counter}")
+        except Exception as e:
+            self.get_logger().error(f"Failed to save VLM reasoning: {e}")
+    
+    def save_vlm_decision_image(self):
+        """Save the image at the moment of VLM decision and create annotated version"""
+        if self.latest_image is None:
+            return
+            
+        image_filename = f"dataset_{self.dataset_counter:03d}_{self.current_dataset['timestamp_str']}.jpg"
+        image_path = f"{self.session_dir}/images/{image_filename}"
+        
+        # Save original image
+        cv2.imwrite(image_path, self.latest_image)
+        self.current_dataset['image_path'] = image_filename
+        
+        # Create annotated version with action label
+        annotated_image = self.latest_image.copy()
+        action_text = f"Action: {self.current_dataset['action']}"
+        
+        # Get image dimensions for positioning
+        height, width = annotated_image.shape[:2]
+        
+        # Set up text properties
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 1.0
+        color = (0, 0, 0)  # Black text
+        thickness = 2
+        
+        # Get text size for positioning
+        (text_width, text_height), baseline = cv2.getTextSize(action_text, font, font_scale, thickness)
+        
+        # Position in top right corner with some padding
+        padding = 10
+        x = width - text_width - padding
+        y = text_height + padding
+        
+        # Add text to image
+        cv2.putText(annotated_image, action_text, (x, y), font, font_scale, color, thickness)
+        
+        # Save annotated image
+        annotated_filename = f"annotated_{self.dataset_counter:03d}_{self.current_dataset['timestamp_str']}.jpg"
+        annotated_path = f"{self.session_dir}/annotated/{annotated_filename}"
+        cv2.imwrite(annotated_path, annotated_image)
+        
+        self.get_logger().info(f"📸 VLM decision image saved: {image_filename}")
+        self.get_logger().info(f"🏷️  Annotated image saved: {annotated_filename}")
+    
+    def save_dataset_to_csv(self):
+        """Save completed dataset to CSV file (single file for entire session)"""
+        if not self.current_dataset:
+            return
+            
+        # Prepare data row with all required fields including IMU and environmental data
+        data_row = {
+            'dataset_id': self.current_dataset['dataset_id'],
+            'timestamp': self.current_dataset['timestamp'],
+            'image_path': self.current_dataset['image_path'],
+            'action': self.current_dataset['action'],
+            'random_distance': self.current_dataset['random_distance'],
+            'bumper_event': self.current_dataset['bumper_event'],
+            'total_current': self.current_dataset['total_current'],
+            'final_current': self.current_dataset['final_current'],
+            'current_samples': self.current_dataset.get('current_samples', 0),
+            'encoder_left': self.current_dataset.get('encoder_left', 0),
+            'encoder_right': self.current_dataset.get('encoder_right', 0),
+            # IMU data at VLM decision moment
+            'imu_roll': self.current_dataset['imu_roll'],
+            'imu_pitch': self.current_dataset['imu_pitch'],
+            # Environmental data at VLM decision moment  
+            'temperature': self.current_dataset['temperature'],
+            'pressure': self.current_dataset['pressure'],
+            'humidity': self.current_dataset['humidity']
+        }
+        
+        # Initialize CSV if first dataset
+        if not self.csv_initialized:
+            df = pd.DataFrame([data_row])
+            df.to_csv(self.csv_file_path, index=False)
+            self.csv_initialized = True
+            self.get_logger().info(f"📄 CSV initialized: {self.csv_file_path}")
+        else:
+            # Append to existing CSV
+            df = pd.DataFrame([data_row])
+            df.to_csv(self.csv_file_path, mode='a', header=False, index=False)
+        
+        self.get_logger().info(f"💾 Dataset saved to CSV: ID{data_row['dataset_id']}, Action{data_row['action']}, IMU({data_row['imu_roll']:.2f},{data_row['imu_pitch']:.2f}), Temp{data_row['temperature']:.1f}°C")
 
 def main(args=None):
     rclpy.init(args=args)
-    
     node = DataCollectionNode()
     
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        print("\n🛑 Data Collection stopped")
-        # Save final summary and backup
-        node.save_final_summary()
+        node.get_logger().info("🛑 Data Collection Node stopped")
     finally:
-        if hasattr(node, 'destroy_node'):
-            node.destroy_node()
+        node.destroy_node()
         rclpy.shutdown()
 
 if __name__ == '__main__':
-    main() 
+    main()

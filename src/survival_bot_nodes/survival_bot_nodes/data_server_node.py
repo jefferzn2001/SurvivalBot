@@ -219,8 +219,25 @@ class DataServerNode(Node):
         command = msg.data.strip()
         self.get_logger().info(f"🤖 Command: {command}")
         
+        # Debug Arduino status
         if not self.arduino:
             self.get_logger().warning("⚠️ No Arduino - command ignored")
+            self.get_logger().info(f"🔍 Debug: Arduino object is None. Enable Arduino: {self.enable_arduino}")
+            if self.enable_arduino:
+                self.get_logger().info("🔄 Attempting to reconnect Arduino...")
+                self.setup_arduino()
+            return
+        
+        # Check if Arduino connection is still valid
+        try:
+            if not self.arduino.is_open:
+                self.get_logger().warning("⚠️ Arduino connection closed - attempting reconnect")
+                self.setup_arduino()
+                return
+        except Exception:
+            self.get_logger().warning("⚠️ Arduino connection invalid - attempting reconnect")
+            self.arduino = None
+            self.setup_arduino()
             return
         
         try:
@@ -232,6 +249,9 @@ class DataServerNode(Node):
             
         except Exception as e:
             self.get_logger().error(f"❌ Command failed: {e}")
+            # Try to reconnect on command failure
+            self.arduino = None
+            self.setup_arduino()
     
     def convert_command(self, ros_command):
         """Convert ROS2 command to Arduino format"""

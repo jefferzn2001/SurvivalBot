@@ -5,11 +5,16 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     return LaunchDescription([
-        # Data Collection Node
+        # VLM-Triggered Data Collection Node
         Node(
             package='survival_bot_nodes',
             executable='data_collection_node.py',
             name='data_collection_node',
-            output='screen'
+            output='screen',
+            parameters=[{
+                'vlm_triggered_mode': True,
+                'output_dir': './train',
+                'session_name': 'vlm_session'
+            }]
         )
     ]) 

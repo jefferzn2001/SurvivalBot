@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-VLM Navigation Random Node - VLM navigation with random distance 1-3m variation
+VLM Navigation Random Node - VLM navigation with random distance -1 to 3m variation
+Implements proper data collection sequence with monitoring
 """
 
 import rclpy
@@ -11,6 +12,7 @@ import os
 import sys
 import cv2
 import numpy as np
+import random
 from datetime import datetime
 from std_msgs.msg import String
 from sensor_msgs.msg import CompressedImage
@@ -104,47 +106,61 @@ class VLMNavigationRandomNode(Node):
         
         # Parameters
         self.declare_parameter('goal', 'Max Sunlight Location')
-        self.declare_parameter('max_iterations', 10)
-        self.declare_parameter('navigation_interval', 10.0)
+        self.declare_parameter('max_iterations', 10.0)
+        self.declare_parameter('navigation_interval', 15.0)  # Longer interval for data collection sequence
+        self.declare_parameter('vlm_session_dir', '')  # Shared VLM session directory
         
         self.goal = self.get_parameter('goal').value
         self.max_iterations = self.get_parameter('max_iterations').value
         self.navigation_interval = self.get_parameter('navigation_interval').value
+        self.vlm_session_dir = self.get_parameter('vlm_session_dir').value
         
         # State
         self.latest_image = None
+        self.latest_sensor_data = None
         self.cycle_count = 0
+        self.sequence_state = "waiting"  # waiting, action_executing, post_action_wait
         
         # Setup directories
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.session_dir = f"./vlm_random_session_{timestamp}"
+        if not self.vlm_session_dir:
+            self.session_dir = f"./data_random_{timestamp}"
+        else:
+            self.session_dir = self.vlm_session_dir
+        
         os.makedirs(f"{self.session_dir}/images", exist_ok=True)
         os.makedirs(f"{self.session_dir}/annotated", exist_ok=True)
         
         # ROS2 setup
         self.image_sub = self.create_subscription(
             CompressedImage, 'robot/camera/compressed', self.image_callback, 10)
+        self.sensor_sub = self.create_subscription(
+            String, 'robot/sensor_data', self.sensor_callback, 10)
         self.command_pub = self.create_publisher(String, 'robot/command', 10)
         
-        # VLM decision publisher for data collection
+        # Data collection publishers
         self.vlm_decision_pub = self.create_publisher(String, 'vlm/decision', 10)
+        self.action_status_pub = self.create_publisher(String, 'vlm/action_status', 10)
+        self.final_current_pub = self.create_publisher(String, 'vlm/final_current', 10)
         
-        # Action mapping with base distance 1m (matches standard VLM)
+        # Action mapping with base distance 1m
         self.actions = {
-            1: {"angle": 60, "base_distance": 1.0, "desc": "Turn right 60° then forward with random distance"},
-            2: {"angle": 35, "base_distance": 1.0, "desc": "Turn right 35° then forward with random distance"},
-            3: {"angle": 0, "base_distance": 1.0, "desc": "Move straight forward with random distance"},
-            4: {"angle": -35, "base_distance": 1.0, "desc": "Turn left 35° then forward with random distance"},
-            5: {"angle": -60, "base_distance": 1.0, "desc": "Turn left 60° then forward with random distance"}
+            1: {"angle": 60, "base_distance": 1.0, "desc": "Turn right 60° then forward"},
+            2: {"angle": 35, "base_distance": 1.0, "desc": "Turn right 35° then forward"},
+            3: {"angle": 0, "base_distance": 1.0, "desc": "Move straight forward"},
+            4: {"angle": -35, "base_distance": 1.0, "desc": "Turn left 35° then forward"},
+            5: {"angle": -60, "base_distance": 1.0, "desc": "Turn left 60° then forward"}
         }
         
-        # Start navigation
+        # Start navigation with initial assumptions (all zeros for first action)
+        self.first_action = True
         self.navigation_timer = self.create_timer(self.navigation_interval, self.navigation_cycle)
         
-        self.get_logger().info("🎲 VLM Random Navigation Node Started")
+        self.get_logger().info("🎲 VLM Random Navigation Node Started (Data Collection Mode)")
         self.get_logger().info(f"   Goal: {self.goal}")
         self.get_logger().info(f"   Max cycles: {self.max_iterations}")
-        self.get_logger().info(f"   Base distance: 1.0m + random(0-3m)")
+        self.get_logger().info(f"   Random distance: -1.0 to +3.0m added to base 1.0m")
+        self.get_logger().info(f"   Sequence: VLM → Action → Wait 3s → Final current → Repeat")
         self.get_logger().info(f"   Session: {self.session_dir}")
     
     def image_callback(self, msg):
@@ -157,8 +173,15 @@ class VLMNavigationRandomNode(Node):
         except Exception as e:
             self.get_logger().error(f"Image decode failed: {e}")
     
+    def sensor_callback(self, msg):
+        """Store latest sensor data"""
+        try:
+            self.latest_sensor_data = json.loads(msg.data)
+        except Exception as e:
+            self.get_logger().error(f"Sensor data parse failed: {e}")
+    
     def navigation_cycle(self):
-        """Main VLM navigation cycle"""
+        """Main VLM navigation cycle with data collection sequence"""
         self.cycle_count += 1
         
         if self.cycle_count > self.max_iterations:
@@ -166,15 +189,22 @@ class VLMNavigationRandomNode(Node):
             self.navigation_timer.cancel()
             return
         
-        self.get_logger().info(f"\n{'='*50}")
-        self.get_logger().info(f"🎲 VLM RANDOM CYCLE #{self.cycle_count}/{self.max_iterations}")
-        self.get_logger().info(f"{'='*50}")
+        self.get_logger().info(f"\n{'='*60}")
+        self.get_logger().info(f"🎲 VLM RANDOM DATA COLLECTION CYCLE #{self.cycle_count}/{self.max_iterations}")
+        self.get_logger().info(f"{'='*60}")
+        
+        # Ensure robot starts stationary
+        self.send_command("STOP")
+        time.sleep(0.5)  # Brief pause to ensure stop
         
         if self.latest_image is None:
             self.get_logger().warning("⏳ No camera image available")
             return
         
         try:
+            # Step 1: VLM Decision (robot is stationary)
+            self.get_logger().info("📍 Step 1: Robot stationary, getting VLM decision...")
+            
             # Save image
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
             image_file = f"image_{self.cycle_count:03d}_{timestamp}.jpg"
@@ -194,131 +224,160 @@ class VLMNavigationRandomNode(Node):
             vlm_start = time.time()
             self.get_logger().info("🧠 Sending to Gemini VLM...")
             
-            response = generate_response(annotated_path, self.goal, turn_around_available=False)
-            vlm_time = time.time() - vlm_start
+            if self.first_action:
+                # For first action, use default action (assume initial state is all zeros)
+                action = 3  # Move straight forward
+                reasoning = "Initial action - moving straight forward"
+                random_distance = 0.0  # No randomness for first action
+                self.first_action = False
+                self.get_logger().info("🎯 Using initial action (3) with zero assumptions")
+            else:
+                response = generate_response(annotated_path, self.goal, turn_around_available=False)
+                vlm_time = time.time() - vlm_start
+                
+                if not response:
+                    self.get_logger().error("❌ VLM response failed")
+                    return
+                
+                action = parse_action(response)
+                reasoning = response.text if response else "No reasoning"
+                
+                if action < 1 or action > 5:
+                    self.get_logger().error(f"❌ Invalid action: {action}")
+                    return
+                
+                self.get_logger().info(f"🧠 VLM responded ({vlm_time:.2f}s): Action {action}")
             
-            if not response:
-                self.get_logger().error("❌ VLM failed")
-                return
-            
-            action = parse_action(response)
-            if action not in [1, 2, 3, 4, 5]:
-                self.get_logger().warning(f"⚠️ Invalid action {action}, using 3")
-                action = 3
-            
-            # Generate random distance (0-3 meters added to 1m base)
-            base_distance = self.actions[action]["base_distance"]
-            random_distance_added = np.random.uniform(0, 3)
-            total_distance = base_distance + random_distance_added
-            
-            # Log results
-            action_desc = self.actions[action]["desc"]
-            self.get_logger().info(f"🧠 VLM DECISION: Action {action} - {action_desc}")
-            self.get_logger().info(f"🎲 DISTANCE: {base_distance}m base + {random_distance_added:.2f}m random = {total_distance:.2f}m total")
-            self.get_logger().info(f"⏱️ VLM Response Time: {vlm_time:.2f} seconds")
-            self.get_logger().info(f"📝 VLM Reasoning: {response.text[:100]}...")
+            # Generate random distance from -1 to 3 meters
+            random_distance = random.uniform(-1.0, 3.0)
+            total_distance = max(0.1, self.actions[action]["base_distance"] + random_distance)  # Ensure minimum 0.1m
             
             # Publish VLM decision for data collection
-            self.publish_vlm_decision(action, base_distance, random_distance_added, total_distance, response.text[:200])
+            self.publish_vlm_decision(action, random_distance, reasoning)
             
-            # Execute action
-            execute_start = time.time()
-            self.execute_action(action, total_distance)
-            execute_time = time.time() - execute_start
+            self.get_logger().info(f"🎲 Random distance: {random_distance:.3f}m (Total: {total_distance:.3f}m)")
             
-            # Summary
-            total_time = annotate_time + vlm_time + execute_time
-            self.get_logger().info(f"\n⏱️ TIMING SUMMARY:")
-            self.get_logger().info(f"   Annotation: {annotate_time:.2f}s")
-            self.get_logger().info(f"   VLM Response: {vlm_time:.2f}s ⭐")
-            self.get_logger().info(f"   Execution: {execute_time:.2f}s")
-            self.get_logger().info(f"   Total: {total_time:.2f}s")
+            # Step 2: Execute action with monitoring
+            self.get_logger().info("🚀 Step 2: Executing action with data monitoring...")
+            self.publish_action_status("action_started")
             
-            # Save decision log
-            with open(f"{self.session_dir}/decisions.txt", "a") as f:
-                f.write(f"\nCYCLE #{self.cycle_count}\n")
-                f.write(f"Time: {datetime.now()}\n")
-                f.write(f"VLM Response Time: {vlm_time:.2f}s\n")
-                f.write(f"Action: {action} - {action_desc}\n")
-                f.write(f"Base Distance: {base_distance}m\n")
-                f.write(f"Random Added: {random_distance_added:.2f}m\n")
-                f.write(f"Total Distance: {total_distance:.2f}m\n")
-                f.write(f"Response: {response.text[:200]}...\n")
-                f.write("-" * 40 + "\n")
-                
+            action_result = self.execute_action(action, total_distance)
+            
+            self.publish_action_status("action_completed")
+            self.get_logger().info(f"✅ Action completed: {action_result}")
+            
+            # Step 3: Wait 3 seconds at destination
+            self.get_logger().info("⏳ Step 3: Waiting 3 seconds at destination...")
+            self.send_command("STOP")
+            time.sleep(3.0)
+            
+            # Step 4: Read final current sensor
+            self.get_logger().info("🔋 Step 4: Reading final current sensor...")
+            final_current = self.read_final_current()
+            
+            # Publish final current for data collection
+            self.publish_final_current(final_current)
+            
+            self.get_logger().info(f"💾 Cycle #{self.cycle_count} complete - Final current: {final_current:.3f}A")
+            
         except Exception as e:
-            self.get_logger().error(f"❌ Navigation cycle failed: {e}")
+            self.get_logger().error(f"Navigation cycle failed: {e}")
+            self.send_command("STOP")
     
     def execute_action(self, action, total_distance):
-        """Execute VLM action with random distance"""
-        try:
-            angle = self.actions[action]["angle"]
-            desc = self.actions[action]["desc"]
-            
-            self.get_logger().info(f"🚀 EXECUTING: Action {action} with {total_distance:.2f}m")
-            
-            # Turn if needed
-            if angle != 0:
-                turn_cmd = f"TURN,{angle}"
-                self.send_command(turn_cmd)
-                self.get_logger().info(f"   🔄 Turning {angle}° for 3 seconds...")
-                time.sleep(3.0)  # Fixed 3 second delay for turn
-            
-            # Move forward with random distance
-            forward_cmd = f"FORWARD,{total_distance:.2f}"
-            self.send_command(forward_cmd)
-            self.get_logger().info(f"   ⬆️ Moving forward {total_distance:.2f}m...")
-            time.sleep(0.1)  # Brief delay then let it run
-            
-            self.get_logger().info(f"✅ Action {action} commands sent")
-            
-        except Exception as e:
-            self.get_logger().error(f"❌ Execution failed: {e}")
+        """Execute action with specified total distance"""
+        action_info = self.actions[action]
+        angle = action_info["angle"]
+        description = action_info["desc"]
+        
+        self.get_logger().info(f"🎯 Executing: {description}")
+        self.get_logger().info(f"   Angle: {angle}°, Distance: {total_distance:.3f}m")
+        
+        # Turn first if needed
+        if angle != 0:
+            turn_command = f"TURN,{angle}"
+            self.send_command(turn_command)
+            time.sleep(abs(angle) / 30)  # Rough timing based on turn rate
+        
+        # Move forward with calculated distance
+        move_command = f"FORWARD,{total_distance:.3f}"
+        self.send_command(move_command)
+        
+        # Wait for movement to complete (rough estimate)
+        move_time = max(2.0, total_distance * 1.5)  # At least 2 seconds, scale with distance
+        time.sleep(move_time)
+        
+        return f"Action {action}: {angle}° turn, {total_distance:.3f}m forward"
     
-    def publish_vlm_decision(self, action, base_distance, random_distance_added, total_distance, reasoning):
+    def read_final_current(self):
+        """Read final current sensor value (placeholder for solar panel)"""
+        if self.latest_sensor_data:
+            # For now, return the current sensor reading
+            # In future, this would be solar panel current
+            current_reading = self.latest_sensor_data.get('current', 0.0)
+            return max(0.0, current_reading)  # Filter negative values
+        return 0.0  # Placeholder
+    
+    def publish_vlm_decision(self, action, random_distance, reasoning):
         """Publish VLM decision for data collection"""
-        try:
-            decision_data = {
-                'action': action,
-                'distance': base_distance,
-                'random_distance_added': random_distance_added,
-                'total_distance': total_distance,
-                'reasoning': reasoning,
-                'timestamp': datetime.now().isoformat(),
-                'vlm_type': 'random'
-            }
-            
-            msg = String()
-            msg.data = json.dumps(decision_data)
-            self.vlm_decision_pub.publish(msg)
-            
-        except Exception as e:
-            self.get_logger().error(f"VLM decision publish failed: {e}")
+        decision_data = {
+            'cycle': self.cycle_count,
+            'action': action,
+            'random_distance': random_distance,
+            'reasoning': reasoning,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        msg = String()
+        msg.data = json.dumps(decision_data)
+        self.vlm_decision_pub.publish(msg)
+        
+        self.get_logger().info(f"📡 Published VLM decision: Action {action}, Random {random_distance:.3f}m")
+    
+    def publish_action_status(self, status):
+        """Publish action execution status"""
+        status_data = {
+            'cycle': self.cycle_count,
+            'status': status,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        msg = String()
+        msg.data = json.dumps(status_data)
+        self.action_status_pub.publish(msg)
+    
+    def publish_final_current(self, final_current):
+        """Publish final current reading"""
+        current_data = {
+            'cycle': self.cycle_count,
+            'final_current': final_current,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        msg = String()
+        msg.data = json.dumps(current_data)
+        self.final_current_pub.publish(msg)
     
     def send_command(self, command):
         """Send command to robot"""
         msg = String()
         msg.data = command
         self.command_pub.publish(msg)
+        self.get_logger().info(f"📤 Command: {command}")
 
 def main(args=None):
     rclpy.init(args=args)
-    
-    if not VLM_READY:
-        print("❌ Cannot start VLM Random Navigation:")
-        print("   - Check VLMNAV folder exists")
-        print("   - Check .env file with API_KEY")
-        return
-    
     node = VLMNavigationRandomNode()
     
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        print("\n🛑 VLM Random Navigation stopped")
+        node.get_logger().info("🛑 VLM Random Navigation stopped")
+        # Send stop command
+        if hasattr(node, 'send_command'):
+            node.send_command("STOP")
     finally:
-        if hasattr(node, 'destroy_node'):
-            node.destroy_node()
+        node.destroy_node()
         rclpy.shutdown()
 
 if __name__ == '__main__':
