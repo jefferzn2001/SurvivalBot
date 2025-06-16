@@ -142,7 +142,17 @@ class DataCollectionNode(Node):
         if not self.latest_sensor_data:
             return
             
-        current_value = self.latest_sensor_data.get('current', 0.0)
+        # Handle new current sensor structure with in/out values
+        current_data = self.latest_sensor_data.get('current', {})
+        if isinstance(current_data, dict):
+            # New structure: {"in": 0.0, "out": 0.0}
+            current_in = current_data.get('in', 0.0)
+            current_out = current_data.get('out', 0.0)
+            # Use output current as main current reading (or sum them)
+            current_value = current_out  # Use out current, change to current_in + current_out if you want sum
+        else:
+            # Old structure: single float value (fallback)
+            current_value = current_data
         
         # Filter out negative values and collect readings
         if current_value >= 0:

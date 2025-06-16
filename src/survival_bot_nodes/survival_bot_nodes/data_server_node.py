@@ -173,11 +173,11 @@ class DataServerNode(Node):
         if not self.arduino:
             # Use fake data if no Arduino - Arduino provides motion status
             self.latest_sensor_data = {
-                "imu": {"roll": 0.0, "pitch": 0.0, "yaw": 0.0, "working": False},
+                "imu": {"roll": 0.0, "pitch": 0.0, "yaw": 0.0},
                 "encoders": {"left": 0, "right": 0},
-                "current": 0.0,
+                "current": {"in": 0.0, "out": 0.0},  # Updated to match Arduino structure
                 "ldr": {"left": 512, "right": 512},
-                "environment": {"temperature": 25.0, "humidity": 50.0, "pressure": 1013.25, "working": False},
+                "environment": {"temperature": 25.0, "humidity": 50.0, "pressure": 1013.25},
                 "bumpers": {"top": 0, "bottom": 0, "left": 0, "right": 0},
                 "motion": "stop",  # Arduino provides this directly
                 "timestamp": time.time(),

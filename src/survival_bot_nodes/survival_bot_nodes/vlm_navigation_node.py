@@ -310,9 +310,18 @@ class VLMNavigationNode(Node):
     def read_final_current(self):
         """Read final current sensor value (placeholder for solar panel)"""
         if self.latest_sensor_data:
-            # For now, return the current sensor reading
-            # In future, this would be solar panel current
-            current_reading = self.latest_sensor_data.get('current', 0.0)
+            # Handle new current sensor structure
+            current_data = self.latest_sensor_data.get('current', {})
+            if isinstance(current_data, dict):
+                # New structure: {"in": 0.0, "out": 0.0}
+                current_in = current_data.get('in', 0.0)
+                current_out = current_data.get('out', 0.0)
+                # Use output current as main reading (placeholder set to 0)
+                current_reading = current_out  # Currently set to 0 as placeholder
+            else:
+                # Old structure: single float value (fallback)
+                current_reading = current_data
+            
             return max(0.0, current_reading)  # Filter negative values
         return 0.0  # Placeholder
     

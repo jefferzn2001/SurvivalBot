@@ -39,9 +39,10 @@
 #define BOTTOM_BUMPER_PIN 42
 #define LEFT_BUMPER_PIN  40
 #define RIGHT_BUMPER_PIN 38
-#define CURRENT_PIN      A0
-#define LDR_LEFT_PIN     A2
-#define LDR_RIGHT_PIN    A3
+#define CURRENT_OUT_PIN  A0
+#define CURRENT_IN_PIN   A1
+#define LDR_LEFT_PIN     A3
+#define LDR_RIGHT_PIN    A2
 
 // Motor control pins
 #define L_MOTOR_DIR 6   
@@ -278,12 +279,14 @@ void startTurn(float angle) {
 void startBackup() {
   // Automatic 1-meter backup when bumper is hit
   const float WHEEL_CIRCUMFERENCE_M = 3.14159 * 0.192;
-  const float ENCODER_COUNTS_PER_REV = 6000.0;
+  const float ENCODER_COUNTS_PER_REV = 9000.0;
   long backupDistance = (long)((-1.0 / WHEEL_CIRCUMFERENCE_M) * ENCODER_COUNTS_PER_REV);
   
   encoderLeft = 0;
   encoderRight = 0;
   startMove(backupDistance);
+
+  
 }
 
 void emergencyStop() {
@@ -556,11 +559,11 @@ void sendSensorData() {
   Serial.print("\"imu\":{\"roll\":");Serial.print(roll, 2);
   Serial.print(",\"pitch\":");Serial.print(pitch, 2);
   Serial.print(",\"yaw\":");Serial.print(yaw, 2);
-  Serial.print(",\"working\":");Serial.print(imuWorking ? "true" : "false");
   Serial.print("},\"encoders\":{\"left\":");Serial.print(encoderLeft);
   Serial.print(",\"right\":");Serial.print(encoderRight);
-  Serial.print("},\"current\":");Serial.print(readCurrent(), 2);
-  Serial.print(",\"ldr\":{\"left\":");Serial.print(analogRead(LDR_LEFT_PIN));
+  Serial.print("},\"current\":{\"in\":");Serial.print(readCurrentIn(), 2);
+  Serial.print(",\"out\":");Serial.print(readCurrentOut(), 2);
+  Serial.print("},\"ldr\":{\"left\":");Serial.print(analogRead(LDR_LEFT_PIN));
   Serial.print(",\"right\":");Serial.print(analogRead(LDR_RIGHT_PIN));
   Serial.print("},\"environment\":{");
   if (bmeWorking) {
@@ -570,7 +573,6 @@ void sendSensorData() {
   } else {
     Serial.print("\"temperature\":0,\"humidity\":0,\"pressure\":0");
   }
-  Serial.print(",\"working\":");Serial.print(bmeWorking ? "true" : "false");
   Serial.print("},\"bumpers\":{\"top\":");Serial.print(digitalRead(TOP_BUMPER_PIN) == LOW ? 1 : 0);
   Serial.print(",\"bottom\":");Serial.print(digitalRead(BOTTOM_BUMPER_PIN) == LOW ? 1 : 0);
   Serial.print(",\"left\":");Serial.print(digitalRead(LEFT_BUMPER_PIN) == LOW ? 1 : 0);
@@ -586,14 +588,19 @@ void sendSensorData() {
 void calibrateCurrentSensor() {
   long sum = 0;
   for (int i = 0; i < 128; i++) {
-    sum += analogRead(CURRENT_PIN);
+    sum += analogRead(CURRENT_OUT_PIN);
     delayMicroseconds(120);
   }
   ACS_OFFSET_V = (sum / 128.0) * (5.0 / 1023.0);
 }
 
-float readCurrent() {
-  float vout = analogRead(CURRENT_PIN) * (5.0 / 1023.0);
+float readCurrentOut() {
+  float vout = analogRead(CURRENT_OUT_PIN) * (5.0 / 1023.0);
+  return (vout - ACS_OFFSET_V) / ACS_SENSITIVITY;
+}
+
+float readCurrentIn() {
+  float vout = analogRead(CURRENT_IN_PIN) * (5.0 / 1023.0);
   return (vout - ACS_OFFSET_V) / ACS_SENSITIVITY;
 }
 
