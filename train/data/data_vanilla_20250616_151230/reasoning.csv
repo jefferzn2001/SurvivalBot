@@ -1,0 +1,48 @@
+dataset_id,timestamp,action,random_distance,imu_roll,imu_pitch,temperature,humidity,pressure,reasoning
+1,2025-06-16T15:12:46.263786,3,0.0,1.47,-4.3,22.7,61.5,1017.9,Initial action - moving straight forward
+2,2025-06-16T15:13:04.108233,5,0.0,1.56,-4.24,22.6,61.6,1017.9,"Okay, I'm assessing the environment. I see a wall, some kind of electronic device on top of a cardboard box, and a whiteboard in the background. Sunlight usually enters through windows, so the area near the whiteboard might be a good location to search for sunlight. It seems there's also a door nearby that is open, so that could also be a potential source of sunlight. To get closer to the potential sunlight locations, I should move towards the right side of the image.
+
+Action 5 seems to be the best option to move me in that direction.
+
+{'action': 5}"
+3,2025-06-16T15:13:19.306140,5,0.0,1.33,-4.04,22.6,61.6,1017.8,"Okay, here's my analysis of the scene and my decision on the best action to take:
+
+**Scene Understanding:**
+
+I am in what appears to be an office or lab environment. I see a white wall, a whiteboard with some writing/drawings on it, and a door on the right.  There's some equipment, including what looks like a power supply on a cardboard box. From general knowledge, the brightest location in the room will likely be close to windows and doors that lead to the outside.
+
+**Reasoning for Direction:**
+
+Based on the image, the best place to look for sunlight is near the door in the top right portion of the image. We need to get in the direction of the door and windows to maximize my exposure to sunlight.
+
+**Action Selection:**
+
+Action 5 best achieves this goal. It moves me towards the door.
+
+**Final Answer:**
+```json
+{'action': 5}
+```"
+4,2025-06-16T15:13:35.300566,5,0.0,1.29,-4.21,22.7,61.6,1017.8,"Okay, I am a Survival Robot with a solar panel and RGB image sensor. Here's what I see:
+
+My sensor observation shows a room with a white wall on the left and a whiteboard on the right. There's a cardboard box in front of me, and on top of it is a power supply. There's a door further back on the right, and a glimpse of carpet and a dark stripe along the base of the wall suggesting it's the edge of the room.
+
+Based on this, here's my reasoning for finding the Max Sunlight Location:
+
+1.  **Sunlight:** Sunlight usually comes in through windows. Windows are generally located on exterior walls. In this image, the whiteboard might obscure a window, but the open doorway on the right also suggests an outside wall.
+2.  **Direction:** It appears the doorway may lead to an outside hallway, so I should move in that direction.
+
+Considering the potential actions, the general direction I need to go in is towards the right.
+
+Action 5 points towards the right, it appears that moving there will get me closer to the doorway and therefore closer to a potential sunlight source.
+
+Therefore, the best action to take is:
+
+{'action': 5}"
+5,2025-06-16T15:13:49.398843,5,0.0,0.87,-4.45,22.7,61.6,1017.8,"I see a room with a whiteboard on the wall to the right. There is a box on the floor with some kind of electronic device on top of it. I also see a partially visible door on the right side of the image.
+
+The whiteboard and door suggest this is an office or lab setting. Typically, windows are found along exterior walls, so the sunlight is likely coming from the direction of the whiteboard and door.
+
+I should move towards the right side of the image to get closer to the source of light. Action 5 is the most likely to achieve this.
+
+{'action': 5}"

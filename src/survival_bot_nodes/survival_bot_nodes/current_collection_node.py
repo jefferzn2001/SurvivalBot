@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Current Collection Node - Records all sensor data at 10Hz with precise timing
-Records: current sensors, LDR sensors, IMU, encoders, environment, bumpers
-For video synchronization and data analysis
+Current Collection Node - Records all sensor data at 10Hz
+Starts recording immediately when launched and saves to timestamped CSV file
 """
 
 import rclpy
@@ -23,66 +22,34 @@ class CurrentCollectionNode(Node):
         self.output_dir = f"./sensor_data_{timestamp}"
         os.makedirs(self.output_dir, exist_ok=True)
         
-        # CSV file for all sensor data
-        self.csv_file_path = f"{self.output_dir}/sensor_data_10hz.csv"
-        
-        # Data collection state
-        self.data_records = []
-        self.recording = True  # Start recording immediately
-        self.last_save_time = time.time()
-        self.save_interval = 5.0  # Save to file every 5 seconds
-        self.record_count = 0
+        # CSV file for sensor data
+        self.csv_file = f"{self.output_dir}/all_sensors_{timestamp}.csv"
+        self.data_buffer = []
+        self.csv_initialized = False
         
         # Latest sensor data
         self.latest_sensor_data = None
         
-        # Subscribe to sensor data
+        # Collection state
+        self.start_time = time.time()
+        self.sample_count = 0
+        
+        # ROS2 Subscription
         self.sensor_sub = self.create_subscription(
             String, 'robot/sensor_data', self.sensor_callback, 10)
         
-        # Timer for 10Hz data collection (0.1 seconds = 100ms)
-        self.create_timer(0.1, self.collect_data_callback)
+        # Timer for 10Hz data collection
+        self.collection_timer = self.create_timer(0.1, self.collect_data)  # 10Hz = 0.1s
         
-        # Timer for periodic saving
-        self.create_timer(self.save_interval, self.save_data_callback)
+        # Timer for periodic CSV saves (every 5 seconds)
+        self.save_timer = self.create_timer(5.0, self.save_to_csv)
         
-        self.get_logger().info("🔋 Sensor Collection Node Started (10Hz)")
-        self.get_logger().info(f"   Output Directory: {self.output_dir}")
-        self.get_logger().info(f"   CSV File: {self.csv_file_path}")
-        self.get_logger().info(f"   Recording Rate: 10Hz (every 100ms)")
-        self.get_logger().info(f"   Auto-save Interval: {self.save_interval}s")
-        self.get_logger().info("   Recording: ALL sensors with precise timestamps")
-        
-        # Initialize CSV file with headers
-        self.initialize_csv()
-    
-    def initialize_csv(self):
-        """Initialize CSV file with headers for all sensors"""
-        try:
-            headers = [
-                # Timing
-                'timestamp_iso', 'unix_time', 'record_id',
-                # Current sensors (placeholders set to 0)
-                'current_in', 'current_out',
-                # LDR sensors  
-                'ldr_left', 'ldr_right',
-                # IMU data
-                'imu_roll', 'imu_pitch', 'imu_yaw',
-                # Encoder data
-                'encoder_left', 'encoder_right',
-                # Environment data
-                'temperature', 'humidity', 'pressure',
-                # Bumper data
-                'bumper_top', 'bumper_bottom', 'bumper_left', 'bumper_right',
-                # Motion state
-                'motion_state'
-            ]
-            
-            df = pd.DataFrame(columns=headers)
-            df.to_csv(self.csv_file_path, index=False)
-            self.get_logger().info(f"📄 CSV initialized with {len(headers)} columns")
-        except Exception as e:
-            self.get_logger().error(f"Failed to initialize CSV: {e}")
+        self.get_logger().info("📊 All Sensors Collection Node Started")
+        self.get_logger().info(f"   Output directory: {self.output_dir}")
+        self.get_logger().info(f"   CSV file: {self.csv_file}")
+        self.get_logger().info(f"   Collection rate: 10Hz")
+        self.get_logger().info(f"   Recording: All available sensor data from Arduino")
+        self.get_logger().info("   Press Ctrl+C to stop and save final data")
     
     def sensor_callback(self, msg):
         """Store latest sensor data"""
@@ -90,137 +57,106 @@ class CurrentCollectionNode(Node):
             self.latest_sensor_data = json.loads(msg.data)
         except Exception as e:
             self.get_logger().error(f"Sensor data parse failed: {e}")
-            self.latest_sensor_data = None
     
-    def collect_data_callback(self):
-        """Collect all sensor data at 10Hz with precise timing"""
-        if not self.recording:
+    def collect_data(self):
+        """Collect all sensor data at 10Hz"""
+        if not self.latest_sensor_data:
             return
-            
-        if self.latest_sensor_data is None:
+        
+        # Get current timestamp
+        current_time = time.time()
+        relative_time = current_time - self.start_time
+        
+        # Start with timestamp data
+        data_row = {
+            'timestamp': datetime.now().isoformat(),
+            'relative_time_s': round(relative_time, 3),
+            'sample_count': self.sample_count,
+        }
+        
+        # Extract current sensor data (handle both old and new formats)
+        current_data = self.latest_sensor_data.get('current', {})
+        if isinstance(current_data, dict):
+            # New format: {"in": value, "out": value}
+            data_row['current_in_A'] = round(current_data.get('in', 0.0), 4)
+            data_row['current_out_A'] = round(current_data.get('out', 0.0), 4)
+        else:
+            # Old format: simple number (assume it's the output current)
+            data_row['current_in_A'] = 0.0
+            data_row['current_out_A'] = round(current_data, 4)
+        
+        # Extract LDR sensor data
+        ldr_data = self.latest_sensor_data.get('ldr', {})
+        data_row['ldr_left_raw'] = ldr_data.get('left', 0)
+        data_row['ldr_right_raw'] = ldr_data.get('right', 0)
+        
+        # Extract IMU data
+        imu_data = self.latest_sensor_data.get('imu', {})
+        data_row['imu_roll_deg'] = round(imu_data.get('roll', 0.0), 2)
+        data_row['imu_pitch_deg'] = round(imu_data.get('pitch', 0.0), 2)
+        data_row['imu_yaw_deg'] = round(imu_data.get('yaw', 0.0), 2)
+        
+        # Extract encoder data
+        encoders_data = self.latest_sensor_data.get('encoders', {})
+        data_row['encoder_left_count'] = encoders_data.get('left', 0)
+        data_row['encoder_right_count'] = encoders_data.get('right', 0)
+        
+        # Extract environmental data (BME280)
+        environment_data = self.latest_sensor_data.get('environment', {})
+        data_row['temperature_C'] = round(environment_data.get('temperature', 0.0), 1)
+        data_row['humidity_percent'] = round(environment_data.get('humidity', 0.0), 1)
+        data_row['pressure_hPa'] = round(environment_data.get('pressure', 0.0), 1)
+        
+        # Extract bumper sensor data
+        bumpers_data = self.latest_sensor_data.get('bumpers', {})
+        data_row['bumper_top'] = bool(bumpers_data.get('top', 0))
+        data_row['bumper_bottom'] = bool(bumpers_data.get('bottom', 0))
+        data_row['bumper_left'] = bool(bumpers_data.get('left', 0))
+        data_row['bumper_right'] = bool(bumpers_data.get('right', 0))
+        
+        # Extract motion status
+        data_row['motion_status'] = self.latest_sensor_data.get('motion', 'stop')
+        
+        # Add to buffer
+        self.data_buffer.append(data_row)
+        self.sample_count += 1
+        
+        # Log every 50 samples (every 5 seconds at 10Hz)
+        if self.sample_count % 50 == 0:
+            self.get_logger().info(f"📊 Sample {self.sample_count}: I_in={data_row['current_in_A']:.3f}A, I_out={data_row['current_out_A']:.3f}A, Temp={data_row['temperature_C']:.1f}°C, LDR_L={data_row['ldr_left_raw']}, LDR_R={data_row['ldr_right_raw']}")
+    
+    def save_to_csv(self):
+        """Save buffered data to CSV file"""
+        if not self.data_buffer:
             return
         
         try:
-            self.record_count += 1
+            # Convert buffer to DataFrame
+            df = pd.DataFrame(self.data_buffer)
             
-            # Precise timing
-            current_time = datetime.now()
-            timestamp_iso = current_time.isoformat()
-            unix_time = time.time()
+            if not self.csv_initialized:
+                # Create new CSV file with headers
+                df.to_csv(self.csv_file, index=False)
+                self.csv_initialized = True
+                self.get_logger().info(f"📄 CSV file created: {self.csv_file}")
+            else:
+                # Append to existing CSV file
+                df.to_csv(self.csv_file, mode='a', header=False, index=False)
             
-            # Extract current data (set to 0 as placeholders)
-            current_data = self.latest_sensor_data.get('current', {})
-            current_in = 0.0  # Placeholder as requested
-            current_out = 0.0  # Placeholder as requested
+            # Clear buffer after saving
+            buffer_size = len(self.data_buffer)
+            self.data_buffer.clear()
             
-            # Extract LDR data
-            ldr_data = self.latest_sensor_data.get('ldr', {})
-            ldr_left = ldr_data.get('left', 0)
-            ldr_right = ldr_data.get('right', 0)
-            
-            # Extract IMU data
-            imu_data = self.latest_sensor_data.get('imu', {})
-            imu_roll = imu_data.get('roll', 0.0)
-            imu_pitch = imu_data.get('pitch', 0.0)
-            imu_yaw = imu_data.get('yaw', 0.0)
-            
-            # Extract encoder data
-            encoder_data = self.latest_sensor_data.get('encoders', {})
-            encoder_left = encoder_data.get('left', 0)
-            encoder_right = encoder_data.get('right', 0)
-            
-            # Extract environment data
-            env_data = self.latest_sensor_data.get('environment', {})
-            temperature = env_data.get('temperature', 0.0)
-            humidity = env_data.get('humidity', 0.0)
-            pressure = env_data.get('pressure', 0.0)
-            
-            # Extract bumper data
-            bumper_data = self.latest_sensor_data.get('bumpers', {})
-            bumper_top = bumper_data.get('top', 0)
-            bumper_bottom = bumper_data.get('bottom', 0)
-            bumper_left = bumper_data.get('left', 0)
-            bumper_right = bumper_data.get('right', 0)
-            
-            # Extract motion state
-            motion_state = self.latest_sensor_data.get('motion', 'unknown')
-            
-            # Create comprehensive data record
-            data_record = {
-                # Timing
-                'timestamp_iso': timestamp_iso,
-                'unix_time': unix_time,
-                'record_id': self.record_count,
-                # Current sensors (placeholders)
-                'current_in': current_in,
-                'current_out': current_out,
-                # LDR sensors
-                'ldr_left': ldr_left,
-                'ldr_right': ldr_right,
-                # IMU data
-                'imu_roll': imu_roll,
-                'imu_pitch': imu_pitch,
-                'imu_yaw': imu_yaw,
-                # Encoder data
-                'encoder_left': encoder_left,
-                'encoder_right': encoder_right,
-                # Environment data
-                'temperature': temperature,
-                'humidity': humidity,
-                'pressure': pressure,
-                # Bumper data
-                'bumper_top': bumper_top,
-                'bumper_bottom': bumper_bottom,
-                'bumper_left': bumper_left,
-                'bumper_right': bumper_right,
-                # Motion state
-                'motion_state': motion_state
-            }
-            
-            # Add to records list
-            self.data_records.append(data_record)
-            
-            # Log every 50 records (5 seconds at 10Hz) for feedback
-            if self.record_count % 50 == 0:
-                self.get_logger().info(f"📊 Record {self.record_count} - "
-                                     f"LDR L/R: {ldr_left}/{ldr_right}, "
-                                     f"IMU: R{imu_roll:.1f}°/P{imu_pitch:.1f}°/Y{imu_yaw:.1f}°, "
-                                     f"Motion: {motion_state}")
-                
-        except Exception as e:
-            self.get_logger().error(f"Data collection failed: {e}")
-    
-    def save_data_callback(self):
-        """Periodically save data to CSV"""
-        if not self.data_records:
-            return
-            
-        try:
-            # Create DataFrame from collected records
-            df = pd.DataFrame(self.data_records)
-            
-            # Append to CSV file
-            df.to_csv(self.csv_file_path, mode='a', header=False, index=False)
-            
-            records_saved = len(self.data_records)
-            self.get_logger().info(f"💾 Saved {records_saved} records to CSV (Total: {self.record_count})")
-            
-            # Clear the records list after saving
-            self.data_records = []
+            self.get_logger().info(f"💾 Saved {buffer_size} samples to CSV (Total: {self.sample_count})")
             
         except Exception as e:
-            self.get_logger().error(f"Failed to save data: {e}")
+            self.get_logger().error(f"Failed to save CSV: {e}")
     
-    def stop_recording(self):
-        """Stop recording and save final data"""
-        self.recording = False
-        
-        # Save any remaining data
-        if self.data_records:
-            self.save_data_callback()
-        
-        self.get_logger().info(f"🛑 Recording stopped - Total records: {self.record_count}")
-        self.get_logger().info(f"   Data saved to: {self.csv_file_path}")
+    def on_shutdown(self):
+        """Save remaining data on shutdown"""
+        if self.data_buffer:
+            self.save_to_csv()
+            self.get_logger().info(f"🛑 Final save completed - Total samples: {self.sample_count}")
 
 def main(args=None):
     rclpy.init(args=args)
@@ -229,8 +165,8 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().info("\n🛑 Sensor Collection Node stopped")
-        node.stop_recording()
+        node.get_logger().info("🛑 All Sensors Collection Node stopping...")
+        node.on_shutdown()
     finally:
         node.destroy_node()
         rclpy.shutdown()

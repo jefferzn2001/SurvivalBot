@@ -561,25 +561,25 @@ void sendSensorData() {
   Serial.print(",\"yaw\":");Serial.print(yaw, 2);
   Serial.print("},\"encoders\":{\"left\":");Serial.print(encoderLeft);
   Serial.print(",\"right\":");Serial.print(encoderRight);
-  Serial.print("},\"current\":{\"in\":");Serial.print(readCurrentIn(), 2);
+  Serial.print("\"current\":{\"in\":");Serial.print(readCurrentIn(), 2);
   Serial.print(",\"out\":");Serial.print(readCurrentOut(), 2);
   Serial.print("},\"ldr\":{\"left\":");Serial.print(analogRead(LDR_LEFT_PIN));
   Serial.print(",\"right\":");Serial.print(analogRead(LDR_RIGHT_PIN));
-  Serial.print("},\"environment\":{");
-  if (bmeWorking) {
-    Serial.print("\"temperature\":");Serial.print(bme.readTemperature(), 1);
-    Serial.print(",\"humidity\":");Serial.print(bme.readHumidity(), 1);
-    Serial.print(",\"pressure\":");Serial.print(bme.readPressure() / 100.0F, 1);
-  } else {
-    Serial.print("\"temperature\":0,\"humidity\":0,\"pressure\":0");
-  }
-  Serial.print("},\"bumpers\":{\"top\":");Serial.print(digitalRead(TOP_BUMPER_PIN) == LOW ? 1 : 0);
-  Serial.print(",\"bottom\":");Serial.print(digitalRead(BOTTOM_BUMPER_PIN) == LOW ? 1 : 0);
-  Serial.print(",\"left\":");Serial.print(digitalRead(LEFT_BUMPER_PIN) == LOW ? 1 : 0);
-  Serial.print(",\"right\":");Serial.print(digitalRead(RIGHT_BUMPER_PIN) == LOW ? 1 : 0);
-  Serial.print("},\"motion\":\"");
-  Serial.print(isMoving ? "moving" : "stop");
-  Serial.println("\"}");
+    Serial.print("},\"environment\":{");
+    if (bmeWorking) {
+      Serial.print("\"temperature\":");Serial.print(bme.readTemperature(), 1);
+      Serial.print(",\"humidity\":");Serial.print(bme.readHumidity(), 1);
+      Serial.print(",\"pressure\":");Serial.print(bme.readPressure() / 100.0F, 1);
+    } else {
+      Serial.print("\"temperature\":0,\"humidity\":0,\"pressure\":0");
+    }
+    Serial.print("},\"bumpers\":{\"top\":");Serial.print(digitalRead(TOP_BUMPER_PIN) == LOW ? 1 : 0);
+    Serial.print(",\"bottom\":");Serial.print(digitalRead(BOTTOM_BUMPER_PIN) == LOW ? 1 : 0);
+    Serial.print(",\"left\":");Serial.print(digitalRead(LEFT_BUMPER_PIN) == LOW ? 1 : 0);
+    Serial.print(",\"right\":");Serial.print(digitalRead(RIGHT_BUMPER_PIN) == LOW ? 1 : 0);
+    Serial.print("},\"motion\":\"");
+    Serial.print(isMoving ? "moving" : "stop");
+  Serial.println("}");
 }
 
 /* ========================================================================= */

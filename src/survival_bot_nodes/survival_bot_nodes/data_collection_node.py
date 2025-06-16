@@ -16,6 +16,18 @@ import pandas as pd
 from datetime import datetime
 from std_msgs.msg import String
 from sensor_msgs.msg import CompressedImage
+import sys
+
+# Add VLMNAV to path for annotation
+current_dir = os.path.dirname(os.path.abspath(__file__))
+vlmnav_path = os.path.join(current_dir, '..', 'VLMNAV')
+sys.path.append(vlmnav_path)
+
+try:
+    from annotation import annotate_image as vlmnav_annotate_image
+    VLMNAV_AVAILABLE = True
+except ImportError:
+    VLMNAV_AVAILABLE = False
 
 class DataCollectionNode(Node):
     def __init__(self):
@@ -142,16 +154,17 @@ class DataCollectionNode(Node):
         if not self.latest_sensor_data:
             return
             
-        # Handle new current sensor structure with in/out values
-        current_data = self.latest_sensor_data.get('current', {})
+        current_data = self.latest_sensor_data.get('current', 0.0)
+        
+        # Handle both old format (number) and new format (dict with in/out)
         if isinstance(current_data, dict):
-            # New structure: {"in": 0.0, "out": 0.0}
+            # New format: {"in": value, "out": value}
             current_in = current_data.get('in', 0.0)
             current_out = current_data.get('out', 0.0)
-            # Use output current as main current reading (or sum them)
-            current_value = current_out  # Use out current, change to current_in + current_out if you want sum
+            # Use the 'out' value as the main current reading (motor current)
+            current_value = current_out
         else:
-            # Old structure: single float value (fallback)
+            # Old format: simple number
             current_value = current_data
         
         # Filter out negative values and collect readings
@@ -347,7 +360,28 @@ class DataCollectionNode(Node):
         cv2.imwrite(image_path, self.latest_image)
         self.current_dataset['image_path'] = image_filename
         
-        # Create annotated version with action label
+        # Create annotated version with directional arrows (using VLMNAV annotation)
+        annotated_filename = f"annotated_{self.dataset_counter:03d}_{self.current_dataset['timestamp_str']}.jpg"
+        annotated_path = f"{self.session_dir}/annotated/{annotated_filename}"
+        
+        if VLMNAV_AVAILABLE:
+            # Use the proper VLMNAV annotation that draws directional arrows
+            try:
+                vlmnav_annotate_image(image_path, annotated_path)
+                self.get_logger().info(f"🎯 VLMNAV directional arrows annotated: {annotated_filename}")
+            except Exception as e:
+                self.get_logger().error(f"VLMNAV annotation failed: {e}")
+                # Fallback to simple text annotation
+                self._create_simple_text_annotation(annotated_path)
+        else:
+            # Fallback to simple text annotation if VLMNAV not available
+            self.get_logger().warning("⚠️ VLMNAV annotation not available - using simple text")
+            self._create_simple_text_annotation(annotated_path)
+        
+        self.get_logger().info(f"📸 VLM decision image saved: {image_filename}")
+    
+    def _create_simple_text_annotation(self, annotated_path):
+        """Fallback simple text annotation method"""
         annotated_image = self.latest_image.copy()
         action_text = f"Action: {self.current_dataset['action']}"
         
@@ -372,12 +406,8 @@ class DataCollectionNode(Node):
         cv2.putText(annotated_image, action_text, (x, y), font, font_scale, color, thickness)
         
         # Save annotated image
-        annotated_filename = f"annotated_{self.dataset_counter:03d}_{self.current_dataset['timestamp_str']}.jpg"
-        annotated_path = f"{self.session_dir}/annotated/{annotated_filename}"
         cv2.imwrite(annotated_path, annotated_image)
-        
-        self.get_logger().info(f"📸 VLM decision image saved: {image_filename}")
-        self.get_logger().info(f"🏷️  Annotated image saved: {annotated_filename}")
+        self.get_logger().info(f"📝 Simple text annotation created: {os.path.basename(annotated_path)}")
     
     def save_dataset_to_csv(self):
         """Save completed dataset to CSV file (single file for entire session)"""

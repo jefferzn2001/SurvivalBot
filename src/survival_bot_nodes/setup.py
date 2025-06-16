@@ -30,6 +30,7 @@ setup(
             'data_collection_node = survival_bot_nodes.data_collection_node:main',
             'joystick_controller_node = survival_bot_nodes.joystick_controller_node:main',
             'camera_viewer_node = survival_bot_nodes.camera_viewer_node:main',
+            'current_collection_node = survival_bot_nodes.current_collection_node:main',
         ],
     },
 ) 
