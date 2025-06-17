@@ -1,0 +1,64 @@
+dataset_id,timestamp,action,random_distance,imu_roll,imu_pitch,temperature,humidity,pressure,reasoning
+1,2025-06-17T13:57:19.880090,5,0.0,0.06,-3.13,24.5,57.5,1015.3,"Okay, here's my assessment of the situation:
+
+**Observations:**
+
+I'm in a room with what appears to be large windows, which is great because that means sunlight! I see a trash can on the left, an office chair, a cardboard box in the middle, and another blue bin on the right side of my field of view. These aren't particularly helpful for finding sunlight. The main thing I'm looking for is open window area, and I need to go where I can see the most sky through the windows.
+
+**Leads on finding MAX SUNLIGHT LOCATION:**
+
+Based on the image, the windows are the source of sunlight. To find the MAX SUNLIGHT LOCATION, I need to move closer to the windows and toward where the window area appears to be the largest, which is to the right and towards the front.
+
+**Direction to go in:**
+
+Based on the window layout, I need to move towards the right to maximize sunlight exposure.
+
+**Action:**
+
+Looking at the red lines, the action that moves me furthest to the right (closer to the windows) is action 5.
+
+**Final Answer:**
+{'action': 5}"
+2,2025-06-17T13:57:49.988701,5,0.0,-0.36,-3.33,24.5,57.5,1015.3,"Okay, here's my analysis of the scene and my chosen action:
+
+**Scene Description:**
+
+I am in a room with carpeted flooring. There is a large window with sunlight coming in, suggesting the presence of the MAX SUNLIGHT LOCATION. I can see a cardboard box to my left and a blue bucket in front of me. There also appear to be some blue objects (possibly cables or straps) to the left. The scene is well-lit, especially near the windows.
+
+**Reasoning for Direction:**
+
+My primary goal is to find the MAX SUNLIGHT LOCATION. Based on my prior knowledge, the best location to get MAX SUNLIGHT LOCATION is going to be by the window. Based on the current image, the window appears to be behind points labeled 0-5. Since points 0 and 5 are close to the window, going to point 0 or 5 seems like a good idea. Point 5 is a little closer to the center and will let me avoid objects to my left.
+
+**Action Selection:**
+
+*   Action 0 leads directly towards the window on the right.
+*   Action 5 leads slightly towards the window on the right.
+
+Both are better actions than going left towards 1 or 2, or straight ahead towards 3 and 4. Action 5 is slightly better for following the windows.
+
+**Final Answer:**
+```json
+{'action': 5}
+```"
+3,2025-06-17T13:58:04.366550,3,0.0,-0.44,-3.4,24.5,57.6,1015.3,"Okay, here's my analysis of the scene and the best action to take:
+
+**Sensor Observation:**
+
+The image shows an indoor environment, likely an office or a room with large windows. The floor is covered in carpet.  A portion of a wall is visible on the right side of the image. There's a window or a series of windows taking up most of the background, suggesting that is where the sunlight is coming from. A blue container is located on the left side of the image.
+
+**Finding the MAX SUNLIGHT LOCATION:**
+
+Given the large windows in the background, that's almost certainly the primary source of sunlight. My goal is to get as close to those windows as possible.
+
+**Determining the Direction:**
+
+To maximize sunlight exposure, I need to move towards the center.
+
+**Action Selection:**
+
+Looking at the numbered action lines, action 3 is aligned directly to the center of the windows.
+
+**Final Answer:**
+```json
+{'action': 3}
+```"

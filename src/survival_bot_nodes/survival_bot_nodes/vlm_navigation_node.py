@@ -144,21 +144,20 @@ class VLMNavigationNode(Node):
         
         # Action mapping - base distance 1 meter (no randomness)
         self.actions = {
-            1: {"angle": 60, "base_distance": 1.0, "desc": "Turn right 60° then forward 1m"},
-            2: {"angle": 35, "base_distance": 1.0, "desc": "Turn right 35° then forward 1m"},
-            3: {"angle": 0, "base_distance": 1.0, "desc": "Move straight forward 1m"},
-            4: {"angle": -35, "base_distance": 1.0, "desc": "Turn left 35° then forward 1m"},
-            5: {"angle": -60, "base_distance": 1.0, "desc": "Turn left 60° then forward 1m"}
+            1: {"angle": 60, "base_distance": 0.5, "desc": "Turn right 60° then forward 0.5m"},
+            2: {"angle": 35, "base_distance": 0.5, "desc": "Turn right 35° then forward 0.5m"},
+            3: {"angle": 0, "base_distance": 0.5, "desc": "Move straight forward 0.5m"},
+            4: {"angle": -35, "base_distance": 0.5, "desc": "Turn left 35° then forward 0.5m"},
+            5: {"angle": -60, "base_distance": 0.5, "desc": "Turn left 60° then forward 0.5m"}
         }
         
-        # Start navigation with initial assumptions (all zeros for first action)
-        self.first_action = True
+        # Start navigation with VLM decision making from the start
         self.navigation_timer = self.create_timer(self.navigation_interval, self.navigation_cycle)
         
         self.get_logger().info("🧠 VLM Navigation Node Started (Data Collection Mode)")
         self.get_logger().info(f"   Goal: {self.goal}")
         self.get_logger().info(f"   Max cycles: {self.max_iterations}")
-        self.get_logger().info(f"   Distance: Fixed 1.0m (no randomness)")
+        self.get_logger().info(f"   Distance: Fixed 0.5m (no randomness)")
         self.get_logger().info(f"   Sequence: VLM → Action → Wait 3s → Final current → Repeat")
         self.get_logger().info(f"   Session: {self.session_dir}")
     
@@ -223,28 +222,21 @@ class VLMNavigationNode(Node):
             vlm_start = time.time()
             self.get_logger().info("🧠 Sending to Gemini VLM...")
             
-            if self.first_action:
-                # For first action, use default action (assume initial state is all zeros)
-                action = 3  # Move straight forward
-                reasoning = "Initial action - moving straight forward"
-                self.first_action = False
-                self.get_logger().info("🎯 Using initial action (3) with zero assumptions")
-            else:
-                response = generate_response(annotated_path, self.goal, turn_around_available=False)
-                vlm_time = time.time() - vlm_start
-                
-                if not response:
-                    self.get_logger().error("❌ VLM response failed")
-                    return
-                
-                action = parse_action(response)
-                reasoning = response.text if response else "No reasoning"
-                
-                if action < 1 or action > 5:
-                    self.get_logger().error(f"❌ Invalid action: {action}")
-                    return
-                
-                self.get_logger().info(f"🧠 VLM responded ({vlm_time:.2f}s): Action {action}")
+            response = generate_response(annotated_path, self.goal, turn_around_available=False)
+            vlm_time = time.time() - vlm_start
+            
+            if not response:
+                self.get_logger().error("❌ VLM response failed")
+                return
+            
+            action = parse_action(response)
+            reasoning = response.text if response else "No reasoning"
+            
+            if action < 1 or action > 5:
+                self.get_logger().error(f"❌ Invalid action: {action}")
+                return
+            
+            self.get_logger().info(f"🧠 VLM responded ({vlm_time:.2f}s): Action {action}")
             
             # No random distance for vanilla VLM
             random_distance = 0.0

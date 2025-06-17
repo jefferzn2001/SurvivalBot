@@ -1,0 +1,94 @@
+dataset_id,timestamp,action,random_distance,imu_roll,imu_pitch,temperature,humidity,pressure,reasoning
+1,2025-06-17T13:13:30.305956,5,0.0,-0.19,-3.21,24.2,58.4,1015.6,"Okay, here's my analysis of the situation:
+
+**Sensor Observation:**
+
+I see a typical office environment. There are two chairs, a desk with some items on it, a trash can, and a long cardboard box. The floor is carpeted. Most importantly, I see large windows in the background letting in a lot of light.
+
+**Leads on Max Sunlight Location:**
+
+The strongest lead is the windows. Windows are the primary source of sunlight in an indoor environment. The lighter areas of the image near the windows suggest higher light intensity.
+
+**General Direction:**
+
+I need to move towards the windows to maximize sunlight exposure. Based on the layout, moving towards the right side of the image will be most beneficial.
+
+**Action Selection:**
+
+Given the red lines indicating potential actions, Action 5 appears to point most directly towards the windows, allowing me to get closer to the brightest area.
+
+**Final Answer:**
+
+```json
+{'action': 5}
+```"
+2,2025-06-17T13:13:45.781414,4,0.0,0.26,-2.92,24.2,58.4,1015.6,"Okay, here's my analysis of the image and my decision on the best action:
+
+**Image Analysis:**
+
+The image shows an indoor environment, likely an office space. I can see a rolling chair to the left, a cardboard box in the center, and a blue plastic bin on the right. The most prominent feature in terms of finding sunlight is the large set of windows in the background.
+
+**Finding the Max Sunlight Location:**
+
+The maximum sunlight location should be near the window because it is the only source of natural light in the room.
+
+**Determining the General Direction:**
+
+To get closer to the window (and thus the most sunlight), I need to move either towards the center or to the right of the window. The lines 3,4, and 5 are point in those general directions.
+
+**Choosing the Best Action:**
+
+*   Actions 3 looks like it goes toward the center of the window but is blocked by a box.
+*   Action 4, and 5 both are moving to the right, and toward the window. Since the window looks like it is a sliding door, action 4 is likely to put me slightly to the side of the doorway, maximizing the sun exposure.
+
+Therefore, action 4 is likely my best bet.
+
+**Final Answer:**
+```json
+{'action': 4}
+```"
+3,2025-06-17T13:14:00.897025,5,0.0,0.21,-3.3,24.2,58.4,1015.6,"Okay, here's my analysis of the scene and my chosen action:
+
+**Scene Description:**
+
+The image shows an indoor environment. There's a cardboard box on the left side and a blue plastic bin in the center. Large windows are visible in the background, letting in sunlight. The floor appears to be carpeted. The lighting is brighter near the windows.
+
+**Finding Max Sunlight Location:**
+
+Based on my knowledge, the max sunlight location is most likely near the windows. The brightness of the windows indicates sunlight is entering the room, and objects closer to these windows will receive more direct sunlight.
+
+**General Direction:**
+
+I need to move in the general direction of the windows, but it is critical to see which window gets the most sunlight. Judging from the observation, the right side of the image is brighter, as the window is reflecting white light.
+
+**Action Selection:**
+
+Looking at the red lines, action 5 points most directly towards the bright window on the right side. Therefore, that is the optimal choice.
+
+**Final Answer:**
+```json
+{""action"": 5}
+```"
+4,2025-06-17T13:14:15.270105,3,0.0,-0.34,-3.71,24.2,58.3,1015.6,"I am in a room with a carpeted floor. There's a blue bin to my left. In front of me, there's a large window letting in a lot of sunlight.
+
+The brightest area is clearly the window. I need to move towards that. Action 3 points most directly towards the window.
+
+{'action': 3}"
+5,2025-06-17T13:14:31.091592,3,0.0,-0.15,-3.2,24.2,58.2,1015.6,"Okay, here's my analysis of the situation:
+
+**Observation:**
+
+I see a room with a gray carpet and a window in the background. The window appears to be the source of light, indicating sunlight is coming through it. There are some objects on the windowsill.
+
+**Reasoning:**
+
+My goal is to find the maximum sunlight. Based on the observation, the sunlight is coming from the window. Therefore, the closer I get to the window, the more sunlight I'll receive.
+
+**Action Selection:**
+
+The action that will move me closest to the window is action 3, which goes straight toward the window.
+
+**Final Answer:**
+```json
+{'action': 3}
+```"

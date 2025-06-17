@@ -31,8 +31,8 @@ def annotate_image(image_path, output_path):
     origins = [(base_x + offset, bottom_y) for offset in offsets]
 
     # Directions, lengths, and labels
-    angles = [-45, -20, 0, 20, 45]
-    lengths = [200, 220, 240, 220, 200]  # Line lengths
+    angles = [-60, -35, 0, 35, 60]
+    lengths = [150, 180, 200, 180, 150]  # Line lengths
     labels = ['1', '2', '3', '4', '5']
 
     # Draw lines, labels, and circular markers
@@ -55,6 +55,17 @@ def annotate_image(image_path, output_path):
 
         # Label the marker
         cv2.putText(img, labels[i], (end_x - 7, end_y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+
+    # Add number 0 marker on the right side
+    right_marker_x = width - 50  # 50 pixels from right edge
+    right_marker_y = height // 2  # Vertically centered
+    
+    # Draw the circular marker for 0
+    cv2.circle(img, (right_marker_x, right_marker_y), 15, (0, 0, 0), -1)  # Black outer circle
+    cv2.circle(img, (right_marker_x, right_marker_y), 12, (255, 255, 255), -1)  # White inner circle
+    
+    # Label the marker with '0'
+    cv2.putText(img, '0', (right_marker_x - 7, right_marker_y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
 
     # Save the annotated image
     cv2.imwrite(output_path, img, [cv2.IMWRITE_JPEG_QUALITY, 95])
