@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VLM Navigation Random Node - VLM navigation with random distance -1 to 3m variation
+VLM Navigation Random Node - VLM navigation with random distance -0.5 to 2m variation
 Implements proper data collection sequence with monitoring
 """
 
@@ -143,23 +143,22 @@ class VLMNavigationRandomNode(Node):
         self.action_status_pub = self.create_publisher(String, 'vlm/action_status', 10)
         self.final_current_pub = self.create_publisher(String, 'vlm/final_current', 10)
         
-        # Action mapping with base distance 1m
+        # Action mapping - base distance 0.5 meter with random -0.5 to 2m variation
         self.actions = {
-            1: {"angle": 60, "base_distance": 1.0, "desc": "Turn right 60° then forward"},
-            2: {"angle": 35, "base_distance": 1.0, "desc": "Turn right 35° then forward"},
-            3: {"angle": 0, "base_distance": 1.0, "desc": "Move straight forward"},
-            4: {"angle": -35, "base_distance": 1.0, "desc": "Turn left 35° then forward"},
-            5: {"angle": -60, "base_distance": 1.0, "desc": "Turn left 60° then forward"}
+            1: {"angle": 60, "base_distance": 0.5, "desc": "Turn right 60° then forward 0.5m"},
+            2: {"angle": 35, "base_distance": 0.5, "desc": "Turn right 35° then forward 0.5m"},
+            3: {"angle": 0, "base_distance": 0.5, "desc": "Move straight forward 0.5m"},
+            4: {"angle": -35, "base_distance": 0.5, "desc": "Turn left 35° then forward 0.5m"},
+            5: {"angle": -60, "base_distance": 0.5, "desc": "Turn left 60° then forward 0.5m"}
         }
         
-        # Start navigation with initial assumptions (all zeros for first action)
-        self.first_action = True
+        # Start navigation with VLM decision making from the start
         self.navigation_timer = self.create_timer(self.navigation_interval, self.navigation_cycle)
         
         self.get_logger().info("🎲 VLM Random Navigation Node Started (Data Collection Mode)")
         self.get_logger().info(f"   Goal: {self.goal}")
         self.get_logger().info(f"   Max cycles: {self.max_iterations}")
-        self.get_logger().info(f"   Random distance: -1.0 to +3.0m added to base 1.0m")
+        self.get_logger().info(f"   Random distance: -0.5 to +2.0m added to base 0.5m")
         self.get_logger().info(f"   Sequence: VLM → Action → Wait 3s → Final current → Repeat")
         self.get_logger().info(f"   Session: {self.session_dir}")
     
@@ -224,32 +223,24 @@ class VLMNavigationRandomNode(Node):
             vlm_start = time.time()
             self.get_logger().info("🧠 Sending to Gemini VLM...")
             
-            if self.first_action:
-                # For first action, use default action (assume initial state is all zeros)
-                action = 3  # Move straight forward
-                reasoning = "Initial action - moving straight forward"
-                random_distance = 0.0  # No randomness for first action
-                self.first_action = False
-                self.get_logger().info("🎯 Using initial action (3) with zero assumptions")
-            else:
-                response = generate_response(annotated_path, self.goal, turn_around_available=False)
-                vlm_time = time.time() - vlm_start
-                
-                if not response:
-                    self.get_logger().error("❌ VLM response failed")
-                    return
-                
-                action = parse_action(response)
-                reasoning = response.text if response else "No reasoning"
-                
-                if action < 1 or action > 5:
-                    self.get_logger().error(f"❌ Invalid action: {action}")
-                    return
-                
-                self.get_logger().info(f"🧠 VLM responded ({vlm_time:.2f}s): Action {action}")
+            response = generate_response(annotated_path, self.goal, turn_around_available=False)
+            vlm_time = time.time() - vlm_start
             
-            # Generate random distance from -1 to 3 meters
-            random_distance = random.uniform(-1.0, 3.0)
+            if not response:
+                self.get_logger().error("❌ VLM response failed")
+                return
+            
+            action = parse_action(response)
+            reasoning = response.text if response else "No reasoning"
+            
+            if action < 1 or action > 5:
+                self.get_logger().error(f"❌ Invalid action: {action}")
+                return
+            
+            self.get_logger().info(f"🧠 VLM responded ({vlm_time:.2f}s): Action {action}")
+            
+            # Generate random distance from -0.5 to 2 meters
+            random_distance = random.uniform(-0.5, 2.0)
             total_distance = max(0.1, self.actions[action]["base_distance"] + random_distance)  # Ensure minimum 0.1m
             
             # Publish VLM decision for data collection

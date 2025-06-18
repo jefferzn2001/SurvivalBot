@@ -10,7 +10,7 @@ def generate_launch_description():
     session_dir = f"./train/data/data_random_{timestamp}"
     
     return LaunchDescription([
-        # VLM-Triggered Data Collection Node (receives data from remote Pi only)
+        # VLM-Triggered Data Collection Node
         Node(
             package='survival_bot_nodes',
             executable='data_collection_node.py',
@@ -20,11 +20,10 @@ def generate_launch_description():
                 'vlm_triggered_mode': True,
                 'session_name': 'random',
                 'vlm_session_dir': session_dir
-            }],
-            env={'ROS_DOMAIN_ID': '0', 'ROBOT_HARDWARE_MODE': 'remote'}
+            }]
         ),
         
-        # VLM Random Navigation Node Only (sends commands to remote Pi)
+        # VLM Random Navigation Node
         Node(
             package='survival_bot_nodes',
             executable='vlm_navigation_random_node.py',
@@ -35,7 +34,6 @@ def generate_launch_description():
                 'max_iterations': 10.0,
                 'navigation_interval': 15.0,
                 'vlm_session_dir': session_dir
-            }],
-            env={'ROS_DOMAIN_ID': '0', 'ROBOT_HARDWARE_MODE': 'remote'}
+            }]
         )
     ])

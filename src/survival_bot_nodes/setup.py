@@ -32,7 +32,6 @@ setup(
             'camera_viewer_node = survival_bot_nodes.camera_viewer_node:main',
             'current_collection_node = survival_bot_nodes.current_collection_node:main',
             'annotation_tuner_node = survival_bot_nodes.annotation_tuner_node:main',
-            'simple_command_node = survival_bot_nodes.simple_command_node:main',
         ],
     },
 ) 
