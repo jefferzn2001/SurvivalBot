@@ -18,10 +18,11 @@ class MultiModalPreprocessor(nn.Module):
     - ROS2 messages - trainable projection + normalization (skipped for now)
     """
     
-    def __init__(self, device="cuda", projection_dim=256, use_normalization=True):
+    def __init__(self, device="cuda", projection_vision=64, projection_audio=16, use_normalization=True):
         super().__init__()
         self.device = device
-        self.projection_dim = projection_dim
+        self.projection_vision = projection_vision
+        self.projection_audio = projection_audio
         self.use_normalization = use_normalization
         
         logger.info("Initializing MultiModal Preprocessor")
@@ -32,14 +33,13 @@ class MultiModalPreprocessor(nn.Module):
         # self.ros_preprocessor = ROSPreprocessor(device=device)  # Skipped for now
         
         # Initialize trainable projection layers
-        self.vision_projection = nn.Linear(512, projection_dim)  # CLIP outputs 512
-        self.audio_projection = nn.Linear(512, projection_dim)   # CLAP outputs 512
-        # self.ros_projection = nn.Linear(ros_dim, projection_dim)  # Skipped for now
+        self.vision_projection = nn.Linear(512, projection_vision)  # CLIP outputs 512
+        self.audio_projection = nn.Linear(512, projection_audio)   # CLAP outputs 512
         
         # Initialize normalization layers (optional)
         if use_normalization:
-            self.vision_norm = nn.LayerNorm(projection_dim)
-            self.audio_norm = nn.LayerNorm(projection_dim)
+            self.vision_norm = nn.LayerNorm(projection_vision)
+            self.audio_norm = nn.LayerNorm(projection_audio)
             # self.ros_norm = nn.LayerNorm(projection_dim)  # Skipped for now
         
         # Freeze the encoders but keep projections trainable
@@ -193,14 +193,7 @@ class MultiModalPreprocessor(nn.Module):
                 features.append(audio_features)
             except Exception as e:
                 logger.error(f"Error processing audio input: {e}")
-        
-        # if ros_data is not None:  # Skipped for now
-        #     try:
-        #         ros_features = self.process_ros_data(ros_data)
-        #         features.append(ros_features)
-        #     except Exception as e:
-        #         logger.error(f"Error processing ROS data: {e}")
-        
+
         if not features:
             raise ValueError("No valid inputs provided for processing")
         
