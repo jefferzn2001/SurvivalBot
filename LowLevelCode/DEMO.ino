@@ -5,7 +5,7 @@
  *  - Distance-based movement control with PD feedback
  *  - IMU orientation sensing (MPU6050)
  *  - Environmental monitoring (BME280)
- *  - Current sensing (ACS758)
+ *  - Current sensing (INA237)
  *  - Bumper collision detection
  *  - JSON sensor data output for ROS2
  *  
@@ -16,6 +16,8 @@
  *  - TURN_LEFT / TURN_RIGHT  : Fixed-speed turning
  *  - STOP                    : Emergency stop
  *  - STATUS                  : Print current status
+ *  - ON                      : Turn fan ON
+ *  - OFF                     : Turn fan OFF
  *  
  *  Hardware:
  *  - Arduino Mega 2560
@@ -23,7 +25,7 @@
  *  - 2x encoders on front wheels
  *  - MPU6050 IMU sensor
  *  - BME280 environment sensor
- *  - ACS758 current sensor
+ *  - INA237 current sensors (2x for input/output monitoring)
  *  - 4x bumper switches
  *  - 2x LDR light sensors
  *********************************************************************/
@@ -32,6 +34,7 @@
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
+#include <Adafruit_INA237.h>
 
 /* ---------------- Pin assignments ---------------- */
 #define RELAY_PIN        48
@@ -39,8 +42,6 @@
 #define BOTTOM_BUMPER_PIN 42
 #define LEFT_BUMPER_PIN  40
 #define RIGHT_BUMPER_PIN 38
-#define CURRENT_OUT_PIN  A0
-#define CURRENT_IN_PIN   A1
 #define LDR_LEFT_PIN     A3
 #define LDR_RIGHT_PIN    A2
 
@@ -97,14 +98,13 @@ const unsigned long CONTROL_INTERVAL = 50; // Control every 50ms
 // Sensor variables
 Adafruit_MPU6050 mpu;
 Adafruit_BME280 bme;
+Adafruit_INA237 ina237_in = Adafruit_INA237();   // Current IN sensor (default address 0x40)
+Adafruit_INA237 ina237_out = Adafruit_INA237();  // Current OUT sensor (A0 soldered, address 0x41)
 float roll = 0, pitch = 0, yaw = 0;
-bool imuWorking = false, bmeWorking = false;
-float ACS_OFFSET_V = 2.525;
-const float ACS_SENSITIVITY = 0.040;
 
 // Timing
 unsigned long lastIMUUpdate = 0, lastSensorUpdate = 0;
-const unsigned long IMU_PERIOD_MS = 50, SENSOR_PERIOD_MS = 100;
+const unsigned long IMU_PERIOD_MS = 50, SENSOR_PERIOD_MS = 1000; // 1 second for sensor data
 
 // Bumper collision handling
 bool inCollisionRecovery = false;
@@ -138,15 +138,24 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENC_RIGHT_A), isrEncRight, CHANGE);
 
   // Initialize sensors
-  imuWorking = (mpu.begin(0x68) || mpu.begin(0x69));
-  if (imuWorking) {
-    mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
-    mpu.setGyroRange(MPU6050_RANGE_500_DEG);
-    mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+  mpu.begin(0x68);
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+  
+  bme.begin(0x76);
+  
+  // Initialize INA237 current sensors
+  if (!ina237_in.begin(0x40)) {
+    Serial.println("Failed to find INA237 IN sensor");
+  }
+  if (!ina237_out.begin(0x41)) {
+    Serial.println("Failed to find INA237 OUT sensor");
   }
   
-  bmeWorking = (bme.begin(0x76) || bme.begin(0x77));
-  calibrateCurrentSensor();
+  // Set shunt resistor values and max current (0.015Ω shunt, 10A max current)
+  ina237_in.setShunt(0.015, 10.0);   // 0.015Ω shunt resistor, 10A max current
+  ina237_out.setShunt(0.015, 10.0);  // 0.015Ω shunt resistor, 10A max current
 
   Serial.println("READY");
 }
@@ -168,7 +177,7 @@ void loop() {
   }
 
   // Update IMU
-  if (imuWorking && millis() - lastIMUUpdate >= IMU_PERIOD_MS) {
+  if (millis() - lastIMUUpdate >= IMU_PERIOD_MS) {
     lastIMUUpdate = millis();
     updateIMU();
   }
@@ -256,6 +265,16 @@ void handleSerialCommand() {
   else if (command == "STATUS") {
     printStatus();
   }
+  else if (command == "ON") {
+    // Turn fan ON
+    digitalWrite(RELAY_PIN, HIGH);
+    Serial.println("FAN ON");
+  }
+  else if (command == "OFF") {
+    // Turn fan OFF
+    digitalWrite(RELAY_PIN, LOW);
+    Serial.println("FAN OFF");
+  }
 }
 
 void startMove(long distance) {
@@ -285,8 +304,6 @@ void startBackup() {
   encoderLeft = 0;
   encoderRight = 0;
   startMove(backupDistance);
-
-  
 }
 
 void emergencyStop() {
@@ -517,11 +534,8 @@ void stopMotors() {
 /*                              SENSOR UPDATES                               */
 /* ========================================================================= */
 void updateIMU() {
-  if (!imuWorking) return;
-  
   sensors_event_t a, g, temp;
   if (!mpu.getEvent(&a, &g, &temp)) {
-    imuWorking = false;
     roll = pitch = yaw = 0.0;
     return;
   }
@@ -561,47 +575,42 @@ void sendSensorData() {
   Serial.print(",\"yaw\":");Serial.print(yaw, 2);
   Serial.print("},\"encoders\":{\"left\":");Serial.print(encoderLeft);
   Serial.print(",\"right\":");Serial.print(encoderRight);
-  Serial.print("\"current\":{\"in\":");Serial.print(readCurrentIn(), 2);
-  Serial.print(",\"out\":");Serial.print(readCurrentOut(), 2);
-  Serial.print("},\"ldr\":{\"left\":");Serial.print(analogRead(LDR_LEFT_PIN));
+  Serial.print("},\"power\":{\"in\":{\"voltage\":");Serial.print(readVoltageOut(), 2);
+  Serial.print(",\"current\":");Serial.print(readCurrentOut(), 2);
+  Serial.print("},\"out\":{\"voltage\":");Serial.print(readVoltageIn(), 2);
+  Serial.print(",\"current\":");Serial.print(readCurrentIn(), 2);
+  Serial.print("}},\"ldr\":{\"left\":");Serial.print(analogRead(LDR_LEFT_PIN));
   Serial.print(",\"right\":");Serial.print(analogRead(LDR_RIGHT_PIN));
-    Serial.print("},\"environment\":{");
-    if (bmeWorking) {
-      Serial.print("\"temperature\":");Serial.print(bme.readTemperature(), 1);
-      Serial.print(",\"humidity\":");Serial.print(bme.readHumidity(), 1);
-      Serial.print(",\"pressure\":");Serial.print(bme.readPressure() / 100.0F, 1);
-    } else {
-      Serial.print("\"temperature\":0,\"humidity\":0,\"pressure\":0");
-    }
-    Serial.print("},\"bumpers\":{\"top\":");Serial.print(digitalRead(TOP_BUMPER_PIN) == LOW ? 1 : 0);
-    Serial.print(",\"bottom\":");Serial.print(digitalRead(BOTTOM_BUMPER_PIN) == LOW ? 1 : 0);
-    Serial.print(",\"left\":");Serial.print(digitalRead(LEFT_BUMPER_PIN) == LOW ? 1 : 0);
-    Serial.print(",\"right\":");Serial.print(digitalRead(RIGHT_BUMPER_PIN) == LOW ? 1 : 0);
-    Serial.print("},\"motion\":\"");
-    Serial.print(isMoving ? "moving" : "stop");
-  Serial.println("}");
+  Serial.print("},\"environment\":{");
+  Serial.print("\"temperature\":");Serial.print(bme.readTemperature(), 1);
+  Serial.print(",\"humidity\":");Serial.print(bme.readHumidity(), 1);
+  Serial.print(",\"pressure\":");Serial.print(bme.readPressure() / 100.0F, 1);
+  Serial.print("},\"bumpers\":{\"top\":");Serial.print(digitalRead(TOP_BUMPER_PIN) == LOW ? 1 : 0);
+  Serial.print(",\"bottom\":");Serial.print(digitalRead(BOTTOM_BUMPER_PIN) == LOW ? 1 : 0);
+  Serial.print(",\"left\":");Serial.print(digitalRead(LEFT_BUMPER_PIN) == LOW ? 1 : 0);
+  Serial.print(",\"right\":");Serial.print(digitalRead(RIGHT_BUMPER_PIN) == LOW ? 1 : 0);
+  Serial.print("},\"motion\":\"");
+  Serial.print(isMoving ? "moving" : "stop");
+  Serial.println("\"}");
 }
 
 /* ========================================================================= */
 /*                           SENSOR HELPERS                                  */
 /* ========================================================================= */
-void calibrateCurrentSensor() {
-  long sum = 0;
-  for (int i = 0; i < 128; i++) {
-    sum += analogRead(CURRENT_OUT_PIN);
-    delayMicroseconds(120);
-  }
-  ACS_OFFSET_V = (sum / 128.0) * (5.0 / 1023.0);
-}
-
 float readCurrentOut() {
-  float vout = analogRead(CURRENT_OUT_PIN) * (5.0 / 1023.0);
-  return (vout - ACS_OFFSET_V) / ACS_SENSITIVITY;
+  return ina237_out.getCurrent_mA() / 1000.0;  // Convert mA to A
 }
 
 float readCurrentIn() {
-  float vout = analogRead(CURRENT_IN_PIN) * (5.0 / 1023.0);
-  return (vout - ACS_OFFSET_V) / ACS_SENSITIVITY;
+  return ina237_in.getCurrent_mA() / 1000.0;   // Convert mA to A
+}
+
+float readVoltageOut() {
+  return ina237_out.getBusVoltage_V();
+}
+
+float readVoltageIn() {
+  return ina237_in.getBusVoltage_V();
 }
 
 void printStatus() {
