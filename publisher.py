@@ -1,14 +1,12 @@
-# Dev machine (10.102.244.88)
 import zmq
-import json
+import numpy as np
+import time
 
-context = zmq.Context()
-socket = context.socket(zmq.SUB)
-socket.connect("tcp://10.102.200.37:5555")  # Connect to Pi's IP
-socket.setsockopt_string(zmq.SUBSCRIBE, "imu")  # Only subscribe to "imu" messages
+ctx = zmq.Context()
+sock = ctx.socket(zmq.PUB)
+sock.bind("tcp://*:5555")
 
 while True:
-    raw = socket.recv_string()
-    topic, data = raw.split(" ", 1)
-    imu = json.loads(data)
-    print("Received IMU:", imu)
+    arr = np.random.rand(100).astype(np.float32)
+    sock.send(arr.tobytes())
+    time.sleep(0.01)
