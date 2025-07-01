@@ -3,7 +3,7 @@ import numpy as np
 
 ctx = zmq.Context()
 sock = ctx.socket(zmq.SUB)
-sock.connect("tcp://<pi_ip>:5555")
+sock.connect("tcp://10.102.200.37:5555")
 sock.setsockopt(zmq.SUBSCRIBE, b"")
 
 while True:
