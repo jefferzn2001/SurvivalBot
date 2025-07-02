@@ -1,5 +1,0 @@
-dataset_id,timestamp,image_path,action,random_distance,bumper_event,total_current,final_current,current_samples,encoder_left,encoder_right,imu_roll,imu_pitch,temperature,pressure,humidity
-1,2025-06-17T13:13:30.305896,dataset_001_20250617_131330_305.jpg,5,0.0,none,0.0,0.0,40,38,27,-0.19,-3.21,24.2,1015.6,58.4
-2,2025-06-17T13:13:45.781469,dataset_002_20250617_131345_781.jpg,4,0.0,none,0.0,0.0,32,28,23,0.26,-2.92,24.2,1015.6,58.4
-3,2025-06-17T13:14:00.896976,dataset_003_20250617_131400_896.jpg,5,0.0,none,0.0,0.0,40,29,22,0.21,-3.3,24.2,1015.6,58.4
-4,2025-06-17T13:14:15.270078,dataset_004_20250617_131415_270.jpg,3,0.0,none,0.0,0.0,20,24,20,-0.34,-3.71,24.2,1015.6,58.3

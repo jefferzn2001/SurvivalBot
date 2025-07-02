@@ -1,9 +1,12 @@
-# Raspberry Pi Requirements - Data Server Only
+# Raspberry Pi Requirements - ZeroMQ Data Server
 # Install in base Python environment
 
 # Core dependencies (minimal)
 opencv-python>=4.8.0
 numpy>=1.24.0
+
+# ZeroMQ communication for data server
+pyzmq>=25.0.0
 
 # Serial communication (if Arduino connected)
 pyserial>=3.5 

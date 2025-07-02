@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
-Joystick Controller Node - Manual robot control with PWM support
+Joystick Controller - Manual robot control with PWM support
+Uses ZeroMQ data server instead of ROS2
 """
 
-import rclpy
-from rclpy.node import Node
-from std_msgs.msg import String
+import time
+import sys
+import logging
+
+# Import data clients
+sys.path.append('data')
+from command_client import CommandClient
 
 try:
     import pygame
@@ -13,12 +18,17 @@ try:
 except ImportError:
     PYGAME_AVAILABLE = False
 
-class JoystickControllerNode(Node):
-    def __init__(self):
-        super().__init__('joystick_controller_node')
-        
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+class JoystickController:
+    def __init__(self, server_ip="10.102.200.37"):
         if not PYGAME_AVAILABLE:
-            self.get_logger().error("❌ pygame not available - install with: pip install pygame")
+            logger.error("❌ pygame not available - install with: pip install pygame")
             return
         
         # Initialize pygame
@@ -27,11 +37,11 @@ class JoystickControllerNode(Node):
         
         # Enhanced joystick detection
         joystick_count = pygame.joystick.get_count()
-        self.get_logger().info(f"🔍 Found {joystick_count} joystick(s)")
+        logger.info(f"🔍 Found {joystick_count} joystick(s)")
         
         if joystick_count == 0:
-            self.get_logger().error("❌ No joystick detected by pygame")
-            self.get_logger().info("   Try: ls /dev/input/js* or ls /dev/input/event*")
+            logger.error("❌ No joystick detected by pygame")
+            logger.info("   Try: ls /dev/input/js* or ls /dev/input/event*")
             self.joystick = None
         else:
             # List all detected joysticks and find the game controller
@@ -40,33 +50,33 @@ class JoystickControllerNode(Node):
                 joy = pygame.joystick.Joystick(i)
                 joy.init()
                 name = joy.get_name()
-                self.get_logger().info(f"   Joystick {i}: {name}")
+                logger.info(f"   Joystick {i}: {name}")
                 
                 # Look for actual game controllers (not keyboards/mice)
                 if any(keyword in name.lower() for keyword in ['controller', 'gamepad', 'xbox', 'playstation', '8bitdo']):
                     if game_controller_index is None:  # Use the first game controller found
                         game_controller_index = i
-                        self.get_logger().info(f"   → Selected as game controller")
+                        logger.info(f"   → Selected as game controller")
                 joy.quit()
             
             # Use game controller or fallback to joystick 0
             if game_controller_index is not None:
                 controller_index = game_controller_index
-                self.get_logger().info(f"🎮 Using game controller at index {controller_index}")
+                logger.info(f"🎮 Using game controller at index {controller_index}")
             else:
                 controller_index = 0
-                self.get_logger().warning(f"⚠️ No game controller found, using joystick 0")
+                logger.warning(f"⚠️ No game controller found, using joystick 0")
             
             # Initialize the selected controller
             self.joystick = pygame.joystick.Joystick(controller_index)
             self.joystick.init()
-            self.get_logger().info(f"🎮 Active controller: {self.joystick.get_name()}")
-            self.get_logger().info(f"   Axes: {self.joystick.get_numaxes()}")
-            self.get_logger().info(f"   Buttons: {self.joystick.get_numbuttons()}")
-            self.get_logger().info(f"   Hats: {self.joystick.get_numhats()}")
+            logger.info(f"🎮 Active controller: {self.joystick.get_name()}")
+            logger.info(f"   Axes: {self.joystick.get_numaxes()}")
+            logger.info(f"   Buttons: {self.joystick.get_numbuttons()}")
+            logger.info(f"   Hats: {self.joystick.get_numhats()}")
         
-        # Publisher
-        self.command_pub = self.create_publisher(String, 'robot/command', 10)
+        # Setup command client
+        self.command_client = CommandClient(server_ip=server_ip)
         
         # Control mode: 'discrete' or 'pwm'
         self.control_mode = 'pwm'  # Use PWM for smoother control
@@ -74,24 +84,19 @@ class JoystickControllerNode(Node):
         # Previous command to avoid spamming
         self.last_command = ""
         
-        # Timer for joystick polling - FASTER RATE
-        self.create_timer(0.05, self.joystick_callback)  # 20Hz instead of 10Hz
+        # Running state
+        self.running = False
         
-        self.get_logger().info("🎮 Joystick Controller Node Started")
-        self.get_logger().info(f"   Control mode: {self.control_mode}")
-        self.get_logger().info("   Left stick: Movement (up=forward, left=turn left)")
-        self.get_logger().info("   LT=Turn left, RT=Turn right")
-        self.get_logger().info("   PWM format: PWM,right_wheels,left_wheels")
-        self.get_logger().info("   FIXED: Stick left → robot turns left, LT → left turn")
+        logger.info("🎮 Joystick Controller Started")
+        logger.info(f"   Control mode: {self.control_mode}")
+        logger.info("   Left stick: Movement (up=forward, left=turn left)")
+        logger.info("   LT=Turn left, RT=Turn right")
+        logger.info("   PWM format: PWM,right_wheels,left_wheels")
+        logger.info("   FIXED: Stick left → robot turns left, LT → left turn")
     
     def joystick_callback(self):
         """Poll joystick for input"""
         if not self.joystick:
-            # Log this error occasionally
-            debug_counter = getattr(self, '_no_joystick_counter', 0) + 1
-            self._no_joystick_counter = debug_counter
-            if debug_counter % 100 == 0:  # Every 5 seconds
-                self.get_logger().error("❌ No joystick available in callback")
             return
         
         try:
@@ -129,7 +134,7 @@ class JoystickControllerNode(Node):
                     rt_value = max(0, self.joystick.get_axis(3))
                 
             except Exception as e:
-                self.get_logger().error(f"Error reading triggers: {e}")
+                logger.error(f"Error reading triggers: {e}")
                 lt_value = 0.0
                 rt_value = 0.0
             
@@ -139,13 +144,13 @@ class JoystickControllerNode(Node):
                 if self.joystick.get_button(0):
                     if self.control_mode != 'discrete':
                         self.control_mode = 'discrete'
-                        self.get_logger().info("🔄 Switched to discrete control mode")
+                        logger.info("🔄 Switched to discrete control mode")
                 
                 # Button 1 (usually O or B) - switch to PWM mode  
                 if self.joystick.get_button(1):
                     if self.control_mode != 'pwm':
                         self.control_mode = 'pwm'
-                        self.get_logger().info("🔄 Switched to PWM control mode")
+                        logger.info("🔄 Switched to PWM control mode")
             except:
                 pass  # Some controllers might not have these buttons
             
@@ -168,8 +173,9 @@ class JoystickControllerNode(Node):
                 self.handle_pwm_control(left_stick_x, left_stick_y, lt_value, rt_value)
             else:
                 self.handle_discrete_control(left_stick_x, left_stick_y, lt_value, rt_value)
+                
         except Exception as e:
-            self.get_logger().error(f"❌ Exception in joystick callback: {e}")
+            logger.error(f"❌ Exception in joystick callback: {e}")
     
     def handle_pwm_control(self, stick_x, stick_y, lt_value, rt_value):
         """Handle continuous PWM control with trigger turning - FIXED DIRECTIONS"""
@@ -258,37 +264,52 @@ class JoystickControllerNode(Node):
     
     def send_command(self, command):
         """Send command to robot"""
-        msg = String()
-        msg.data = command
-        self.command_pub.publish(msg)
+        self.command_client.send_command(command)
         
         # ALWAYS log PWM commands to see responsiveness
         if command.startswith("PWM,"):
-            self.get_logger().info(f"🎮 {command}")
+            logger.info(f"🎮 {command}")
         elif command != "STOP":
-            self.get_logger().info(f"🎮 {command}")
+            logger.info(f"🎮 {command}")
+    
+    def run(self):
+        """Main run loop"""
+        if not self.joystick:
+            logger.error("❌ Cannot run - no joystick available")
+            return
+        
+        self.running = True
+        logger.info("🎮 Joystick controller running - press Ctrl+C to stop")
+        
+        try:
+            while self.running:
+                self.joystick_callback()
+                time.sleep(0.05)  # 20Hz polling rate
+                
+        except KeyboardInterrupt:
+            logger.info("🛑 Joystick controller stopped by user")
+        finally:
+            self.command_client.stop()
+            self.command_client.close()
+            if self.joystick:
+                self.joystick.quit()
+            pygame.quit()
 
-def main(args=None):
-    rclpy.init(args=args)
+def main():
+    import argparse
     
     if not PYGAME_AVAILABLE:
         print("❌ Cannot start joystick controller - pygame not available")
         print("   Install with: pip install pygame")
         return
     
-    node = JoystickControllerNode()
+    parser = argparse.ArgumentParser(description='Joystick Controller with Data Server')
+    parser.add_argument('--server-ip', type=str, default='10.102.200.37',
+                      help='IP address of the robot running data_server.py')
+    args = parser.parse_args()
     
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        # Send stop command on exit
-        if hasattr(node, 'send_command'):
-            node.send_command("STOP")
-        print("\n🛑 Joystick controller stopped")
-    finally:
-        if hasattr(node, 'destroy_node'):
-            node.destroy_node()
-        rclpy.shutdown()
+    controller = JoystickController(server_ip=args.server_ip)
+    controller.run()
 
 if __name__ == '__main__':
     main() 
