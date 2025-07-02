@@ -172,16 +172,16 @@ class DataServer:
     def read_arduino_data(self):
         """Read sensor data from Arduino"""
         if not self.arduino:
-            # Use fake data if no Arduino
+            # Use fake data if no Arduino - match Arduino JSON format exactly
             self.latest_sensor_data = {
-                "imu": {"roll": 0.0, "pitch": 0.0, "yaw": 0.0, "working": False},
+                "imu": {"roll": 0.0, "pitch": 0.0, "yaw": 0.0},
                 "encoders": {"left": 0, "right": 0},
                 "power": {
                     "in": {"voltage": 0.0, "current": 0.0},
                     "out": {"voltage": 0.0, "current": 0.0}
                 },
                 "ldr": {"left": 512, "right": 512},
-                "environment": {"temperature": 25.0, "humidity": 50.0, "pressure": 1013.25, "working": False},
+                "environment": {"temperature": 25.0, "humidity": 50.0, "pressure": 1013.25},
                 "bumpers": {"top": 0, "bottom": 0, "left": 0, "right": 0},
                 "motion": "stop",
                 "timestamp": time.time(),
