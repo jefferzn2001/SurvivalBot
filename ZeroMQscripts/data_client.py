@@ -26,7 +26,7 @@ class DataClient:
     - Camera feed
     """
     
-    def __init__(self, server_ip="10.102.200.37", data_port=5555):
+    def __init__(self, server_ip="10.102.225.181", data_port=5555):
         """
         Initialize the Data Client
         
@@ -160,7 +160,7 @@ def example_camera_callback(frame):
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Robot Data Client')
-    parser.add_argument('--server-ip', type=str, default='10.102.200.37',
+    parser.add_argument('--server-ip', type=str, default='10.102.225.181',
                       help='IP address or hostname of the Raspberry Pi running data_server.py')
     parser.add_argument('--data-port', type=int, default=5555,
                       help='Port number for data communication')

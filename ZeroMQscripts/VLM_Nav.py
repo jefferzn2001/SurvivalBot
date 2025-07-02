@@ -93,7 +93,7 @@ def parse_action(response):
     return -1
 
 class VLMNavigation:
-    def __init__(self, server_ip="10.102.200.37", goal="Max Sunlight Location", max_iterations=10):
+    def __init__(self, server_ip="10.102.225.181", goal="Max Sunlight Location", max_iterations=10):
         if not VLM_READY:
             logger.error("❌ VLM not ready! Check VLMNAV setup and API key")
             return
@@ -108,6 +108,7 @@ class VLMNavigation:
         self.latest_sensor_data = None
         self.cycle_count = 0
         self.running = False
+        self.state_instance = False  # Track when we're capturing a state instance
         
         # Action state tracking
         self.current_action_state = "idle"  # "idle" or action number (1-5)
@@ -194,6 +195,9 @@ class VLMNavigation:
         """Flatten nested sensor data for CSV storage, excluding server timestamp and fake fields"""
         flattened = {}
         
+        # Add state instance marker
+        flattened['state_instance'] = 1 if self.state_instance else 0
+        
         # IMU data
         imu = sensor_data.get('imu', {})
         flattened['imu_roll'] = imu.get('roll', 0.0)
@@ -256,12 +260,21 @@ class VLMNavigation:
                 df.to_csv(self.raw_data_file, mode='w', header=True, index=False)
                 logger.info(f"📄 Raw data CSV created: {self.raw_data_file}")
             
+            # Print the latest raw values
+            latest_record = self.raw_data_buffer[-1]  # Get most recent record
+            logger.info("📊 Latest Raw Values:")
+            logger.info(f"  Time: {latest_record['timestamp']:.4f}h")
+            logger.info(f"  State: {latest_record['action_state']}")
+            logger.info(f"  IMU: roll={latest_record['imu_roll']:.2f}° pitch={latest_record['imu_pitch']:.2f}° yaw={latest_record['imu_yaw']:.2f}°")
+            logger.info(f"  Encoders: L={latest_record['encoder_left']} R={latest_record['encoder_right']}")
+            logger.info(f"  LDR: L={latest_record['ldr_left']} R={latest_record['ldr_right']}")
+            logger.info(f"  Power: Vin={latest_record['power_in_voltage']:.2f}V Iin={latest_record['power_in_current']:.2f}A")
+            logger.info(f"  Environment: {latest_record['temperature']:.1f}°C {latest_record['humidity']:.1f}%RH {latest_record['pressure']:.1f}hPa")
+            logger.info(f"  Motion: {latest_record['motion']}")
+            
             # Clear buffer
-            buffer_size = len(self.raw_data_buffer)
             self.raw_data_buffer = []
             self.last_save_time = time.time()
-            
-            logger.info(f"💾 Saved {buffer_size} raw data records")
             
         except Exception as e:
             logger.error(f"Failed to save raw data: {e}")
@@ -379,6 +392,9 @@ class VLMNavigation:
             return
         
         try:
+            # Mark this as a state instance (critical data episode)
+            self.state_instance = True
+            
             # Image Capture and Annotation Phase (immediate)
             timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
             
@@ -388,6 +404,9 @@ class VLMNavigation:
             image_file = f"cycle_{self.cycle_count:03d}_{timestamp_str}.jpg"
             image_path = f"{self.session_dir}/images/{image_file}"
             cv2.imwrite(image_path, self.latest_image)
+            
+            # Reset state instance flag after capturing the critical moment
+            self.state_instance = False
             
             # Annotate image with directional arrows
             annotate_start = time.time()
@@ -564,7 +583,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='VLM Navigation with Optimized Timing + Raw Data Recording')
-    parser.add_argument('--server-ip', type=str, default='10.102.200.37',
+    parser.add_argument('--server-ip', type=str, default='10.102.225.181',
                       help='IP address of the robot running data_server.py')
     parser.add_argument('--goal', type=str, default='Max Sunlight Location',
                       help='Navigation goal for VLM')

@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 from PIL import Image
 import logging
+import argparse
 
 # Configure logging
 logging.basicConfig(
@@ -28,7 +29,7 @@ class DataServer:
     - Command processing
     """
     
-    def __init__(self, bind_ip="10.102.200.37", pub_port=5555, cmd_port=5556):
+    def __init__(self, bind_ip="*", pub_port=5555, cmd_port=5556):
         self.bind_ip = bind_ip
         self.pub_port = pub_port
         self.cmd_port = cmd_port
@@ -320,7 +321,20 @@ class DataServer:
             self.context.term()
 
 def main():
-    server = DataServer()
+    parser = argparse.ArgumentParser(description='Robot Data Server')
+    parser.add_argument('--bind-ip', type=str, default='*',
+                      help='IP address to bind to (* for all interfaces)')
+    parser.add_argument('--pub-port', type=int, default=5555,
+                      help='Port number for publishing data')
+    parser.add_argument('--cmd-port', type=int, default=5556,
+                      help='Port number for receiving commands')
+    args = parser.parse_args()
+    
+    server = DataServer(
+        bind_ip=args.bind_ip,
+        pub_port=args.pub_port,
+        cmd_port=args.cmd_port
+    )
     server.run()
 
 if __name__ == '__main__':
