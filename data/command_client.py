@@ -14,7 +14,7 @@ class CommandClient:
     ZeroMQ-based client for sending commands to the robot
     """
     
-    def __init__(self, server_ip="10.102.244.88", cmd_port=5556):
+    def __init__(self, server_ip="10.102.200.37", cmd_port=5556):
         self.server_ip = server_ip
         self.cmd_port = cmd_port
         
@@ -23,7 +23,9 @@ class CommandClient:
         
         # Publisher for commands
         self.pub_socket = self.context.socket(zmq.PUB)
-        self.pub_socket.connect(f"tcp://{server_ip}:{cmd_port}")
+        connect_addr = f"tcp://{server_ip}:{cmd_port}"
+        logger.info(f"Connecting to server at {connect_addr}")
+        self.pub_socket.connect(connect_addr)
         
         # Small delay to allow connection to establish
         time.sleep(0.1)

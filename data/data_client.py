@@ -9,7 +9,13 @@ import cv2
 import numpy as np
 import time
 import logging
+import argparse
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 class DataClient:
@@ -19,7 +25,14 @@ class DataClient:
     - Camera feed
     """
     
-    def __init__(self, server_ip="10.102.244.88", data_port=5555):
+    def __init__(self, server_ip="10.102.200.37", data_port=5555):
+        """
+        Initialize the Data Client
+        
+        Args:
+            server_ip (str): IP address or hostname of the Raspberry Pi running data_server.py
+            data_port (int): Port number for data communication
+        """
         self.server_ip = server_ip
         self.data_port = data_port
         
@@ -102,7 +115,16 @@ def example_camera_callback(frame):
     cv2.waitKey(1)
 
 def main():
-    client = DataClient()
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Robot Data Client')
+    parser.add_argument('--server-ip', type=str, default='raspberrypi.local',
+                      help='IP address or hostname of the Raspberry Pi running data_server.py')
+    parser.add_argument('--data-port', type=int, default=5555,
+                      help='Port number for data communication')
+    args = parser.parse_args()
+
+    # Create client with command line arguments
+    client = DataClient(server_ip=args.server_ip, data_port=args.data_port)
     
     # Add example callbacks
     client.add_sensor_callback(example_sensor_callback)

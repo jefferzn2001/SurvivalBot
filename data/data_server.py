@@ -13,6 +13,11 @@ import numpy as np
 from PIL import Image
 import logging
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 class DataServer:
@@ -23,7 +28,8 @@ class DataServer:
     - Command processing
     """
     
-    def __init__(self, pub_port=5555, cmd_port=5556):
+    def __init__(self, bind_ip="10.102.200.37", pub_port=5555, cmd_port=5556):
+        self.bind_ip = bind_ip
         self.pub_port = pub_port
         self.cmd_port = cmd_port
         
@@ -32,12 +38,16 @@ class DataServer:
         
         # Publisher for sensor data and camera
         self.pub_socket = self.context.socket(zmq.PUB)
-        self.pub_socket.bind(f"tcp://*:{pub_port}")
+        bind_addr = f"tcp://{bind_ip}:{pub_port}"
+        self.pub_socket.bind(bind_addr)
+        logger.info(f"Publisher bound to {bind_addr}")
         
         # Subscriber for commands
         self.cmd_socket = self.context.socket(zmq.SUB)
-        self.cmd_socket.bind(f"tcp://*:{cmd_port}")
+        cmd_addr = f"tcp://{bind_ip}:{cmd_port}"
+        self.cmd_socket.bind(cmd_addr)
         self.cmd_socket.setsockopt_string(zmq.SUBSCRIBE, "")
+        logger.info(f"Command subscriber bound to {cmd_addr}")
         
         # Parameters
         self.enable_arduino = True
