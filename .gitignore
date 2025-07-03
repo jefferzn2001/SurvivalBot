@@ -8,7 +8,7 @@ __pycache__/
 
 # Data directories
 Data/
-vlm_session_*/
+vlm_session_*/ 
 
 # Model files and training outputs
 *.pth

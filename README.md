@@ -204,7 +204,7 @@ pip install -r requirements-pi.txt
 ## 🎮 Usage Examples
 
 ### **Standard VLM Navigation**
-```bash
+   ```bash
 # Start data server on Pi
 python data_server.py
 
@@ -347,7 +347,7 @@ telnet 10.102.200.37 5556
 ```
 
 **Data Server Issues**:
-```bash
+   ```bash
 # Check camera
 python -c "import cv2; cap = cv2.VideoCapture(0); print('Camera OK' if cap.read()[0] else 'Camera Error')"
 

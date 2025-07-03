@@ -9,6 +9,7 @@ import numpy as np
 from datetime import datetime
 import os
 from FakeSolar import panel_current
+import glob
 
 class BatteryState:
     """Battery state estimation based on voltage during idle state"""
@@ -134,7 +135,7 @@ class StateProcessor:
             last_row = last_moving.iloc[-1]
             return last_row['encoder_left'], last_row['encoder_right']
         return 0, 0  # Default if no movement found
-
+    
     def process_raw_data(self, raw_data_path: str):
         """
         Process raw data file and extract state information at state_instance=1 points
@@ -274,11 +275,18 @@ def main():
     """Process raw data into state representations"""
     processor = StateProcessor()
     
-    # Process the new raw data
-    raw_data_path = "data_20250702_155413/raw_data.csv"
-    
+    # Automatically find the latest raw_data.csv in the data/ directory
+    data_dir = os.path.dirname(os.path.abspath(__file__))
+    session_dirs = glob.glob(os.path.join(data_dir, "data_*/raw_data.csv"))
+    if not session_dirs:
+        print("Error: No raw_data.csv files found in any session directory.")
+        return
+    # Sort by session timestamp in folder name
+    session_dirs.sort()
+    raw_data_path = session_dirs[-1]
+    print(f"Processing raw data from: {raw_data_path}")
+
     try:
-        print(f"Processing raw data from: {raw_data_path}")
         processor.process_raw_data(raw_data_path)
         processor.save_raw_state()
         

@@ -33,4 +33,4 @@ pyzmq>=25.0.0
 pygame>=2.1.0 
 
 # Networking
-requests==2.31.0 
+requests==2.31.0

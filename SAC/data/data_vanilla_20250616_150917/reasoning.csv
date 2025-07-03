@@ -1,2 +1,0 @@
-dataset_id,timestamp,action,random_distance,imu_roll,imu_pitch,temperature,humidity,pressure,reasoning
-1,2025-06-16T15:09:32.849518,3,0.0,1.35,-4.27,22.6,61.6,1017.9,Initial action - moving straight forward
