@@ -1,0 +1,7 @@
+cycle,timestamp,timestamp_str,image_file,action,distance_scale,stop_certainty,reasoning
+1,2025-07-04T14:44:38.418954,20250704_144435_432,cycle_001_20250704_144435_432.jpg,0,0.3,1.0,Multimodal policy stop decision: certainty=1.000
+2,2025-07-04T14:44:41.786001,20250704_144438_519,cycle_002_20250704_144438_519.jpg,0,0.3,1.0,Multimodal policy stop decision: certainty=1.000
+3,2025-07-04T14:44:45.354418,20250704_144441_886,cycle_003_20250704_144441_886.jpg,0,0.3,1.0,Multimodal policy stop decision: certainty=1.000
+4,2025-07-04T14:44:48.119904,20250704_144445_455,cycle_004_20250704_144445_455.jpg,0,0.3,1.0,Multimodal policy stop decision: certainty=1.000
+5,2025-07-04T14:44:50.885955,20250704_144448_220,cycle_005_20250704_144448_220.jpg,0,0.3,1.0,Multimodal policy stop decision: certainty=1.000
+6,2025-07-04T14:44:54.352046,20250704_144450_986,cycle_006_20250704_144450_986.jpg,0,0.3,1.0,Multimodal policy stop decision: certainty=1.000

@@ -25,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class JoystickController:
-    def __init__(self, server_ip="10.102.200.37"):
+    def __init__(self, server_ip="10.102.225.181"):
         if not PYGAME_AVAILABLE:
             logger.error("❌ pygame not available - install with: pip install pygame")
             return
@@ -303,7 +303,7 @@ def main():
         return
     
     parser = argparse.ArgumentParser(description='Joystick Controller with Data Server')
-    parser.add_argument('--server-ip', type=str, default='10.102.200.37',
+    parser.add_argument('--server-ip', type=str, default='10.102.225.181',
                       help='IP address of the robot running data_server.py')
     args = parser.parse_args()
     

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-VLM Navigation - Standard VLM navigation with continuous raw data recording
-Uses ZeroMQ data server, records all raw data with timestamps and action states
-Optimized timing: VLM processing starts immediately after action completion
+VLM Policy Navigation - VLM navigation with multimodal actor-based distance scaling and stop certainty
+Uses ZeroMQ data server, records all raw data with timestamps, action states, and policy decisions
+Integrates with multimodal policy actor for variable distance control (0.3-0.6m) and stop certainty
+Processes camera images through CLIP vision encoder for enhanced policy decisions
 """
 
 import json
@@ -15,6 +16,8 @@ import pandas as pd
 from datetime import datetime
 import threading
 import logging
+import torch
+from PIL import Image
 
 # Import data clients
 from data_client import DataClient
@@ -23,6 +26,10 @@ from command_client import CommandClient
 # Import panel_current for Solar_In calculation
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from data.FakeSolar import panel_current
+
+# Import multimodal policy actor
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'SAC')))
+from policy_actor import VLMPolicyActor
 
 # Configure logging
 logging.basicConfig(
@@ -116,8 +123,9 @@ def parse_action(response):
         logger.error(f"Error parsing action: {e}")
     return -1
 
-class VLMNavigation:
-    def __init__(self, server_ip="10.102.225.181", goal="Max Sunlight Location", max_iterations=10):
+class VLMPolicyNavigation:
+    def __init__(self, server_ip="10.102.225.181", goal="Max Sunlight Location", 
+                 max_iterations=10, model_path=None, stop_threshold=0.95, device='cpu'):
         if not VLM_READY:
             logger.error("❌ VLM not ready! Check VLMNAV setup and API key")
             return
@@ -125,7 +133,9 @@ class VLMNavigation:
         # Parameters
         self.goal = goal
         self.max_iterations = max_iterations
-        self.navigation_interval = 0.1  # Minimal interval - VLM processing starts immediately
+        self.navigation_interval = 0.1  # Minimal interval
+        self.stop_threshold = stop_threshold  # Stop if certainty > this value
+        self.device = device
         
         # State
         self.latest_image = None
@@ -143,21 +153,49 @@ class VLMNavigation:
         self.vlm_result = None
         self.vlm_thread = None
         
+        # Policy inference timing
+        self.policy_inference_active = False  # Track when policy inference is happening
+        
+        # Initialize policy values to None (not yet computed)
+        self.current_distance_scale = None
+        self.current_stop_certainty = None
+        
+        # Multimodal policy actor setup
+        self.obs_dim = 77  # 64 vision + 13 sensor
+        self.actor = VLMPolicyActor(obs_dim=self.obs_dim, device=device)
+        
+        # Load model if path provided
+        if model_path and os.path.exists(model_path):
+            try:
+                self.actor.load_state_dict(torch.load(model_path, map_location=device))
+                logger.info(f"✅ Multimodal policy actor loaded from: {model_path}")
+            except Exception as e:
+                logger.error(f"❌ Failed to load policy actor: {e}")
+                logger.info("🔄 Using randomly initialized multimodal policy actor")
+        else:
+            logger.info("🎲 Using randomly initialized multimodal policy actor")
+        
+        self.actor.eval()  # Set to evaluation mode
+        
         # Setup directories in external Data folder
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         data_folder = os.path.abspath(os.path.join(os.path.expanduser('~'), 'SurvivalBot', 'data'))
-        self.session_dir = os.path.join(data_folder, f"data_{timestamp}")
+        self.session_dir = os.path.join(data_folder, f"policy_data_{timestamp}")
         
         os.makedirs(f"{self.session_dir}/images", exist_ok=True)
         os.makedirs(f"{self.session_dir}/annotated", exist_ok=True)
         
-        # Raw data recording
+        # Raw data recording (with additional policy columns)
         self.raw_data_file = f"{self.session_dir}/raw_data.csv"
         self.raw_data_buffer = []
         self.save_interval = 1.0  # Save every 1 second
         self.last_save_time = time.time()
         
-        # Reasoning CSV for VLM decisions
+        # State data recording (exact policy input states - now 77D)
+        self.state_csv_path = f"{self.session_dir}/state.csv"
+        self.state_csv_initialized = False
+        
+        # Reasoning CSV for VLM and policy decisions
         self.reasoning_csv_path = f"{self.session_dir}/reasoning.csv"
         self.reasoning_csv_initialized = False
         
@@ -169,22 +207,25 @@ class VLMNavigation:
         self.data_client.add_sensor_callback(self.sensor_callback)
         self.data_client.add_camera_callback(self.camera_callback)
         
-        # Action mapping - base distance 0.3 meter
+        # Action mapping - base distance will be scaled by actor
         self.actions = {
             0: {"angle": 60, "base_distance": 0.0, "desc": "Turn right 60° in place"},
-            1: {"angle": 60, "base_distance": 0.3, "desc": "Turn right 60° then forward 0.3m"},
-            2: {"angle": 35, "base_distance": 0.3, "desc": "Turn right 35° then forward 0.3m"},
-            3: {"angle": 0, "base_distance": 0.3, "desc": "Move straight forward 0.3m"},
-            4: {"angle": -35, "base_distance": 0.3, "desc": "Turn left 35° then forward 0.3m"},
-            5: {"angle": -60, "base_distance": 0.3, "desc": "Turn left 60° then forward 0.3m"}
+            1: {"angle": 60, "base_distance": 0.3, "desc": "Turn right 60° then forward [scaled]"},
+            2: {"angle": 35, "base_distance": 0.3, "desc": "Turn right 35° then forward [scaled]"},
+            3: {"angle": 0, "base_distance": 0.3, "desc": "Move straight forward [scaled]"},
+            4: {"angle": -35, "base_distance": 0.3, "desc": "Turn left 35° then forward [scaled]"},
+            5: {"angle": -60, "base_distance": 0.3, "desc": "Turn left 60° then forward [scaled]"}
         }
         
-        logger.info("🧠 VLM Navigation Started (Optimized Timing + Continuous Raw Data)")
+        logger.info("🧠 VLM Multimodal Policy Navigation Started")
         logger.info(f"   Goal: {self.goal}")
         logger.info(f"   Max cycles: {self.max_iterations}")
+        logger.info(f"   Stop threshold: {self.stop_threshold}")
+        logger.info(f"   Device: {self.device}")
         logger.info(f"   Session: {self.session_dir}")
         logger.info(f"   Raw data: {self.raw_data_file}")
-        logger.info(f"   Timing: VLM processing starts immediately after action")
+        logger.info(f"   State data: {self.state_csv_path}")
+        logger.info(f"   Multimodal policy actor obs_dim: {self.obs_dim}")
     
     def camera_callback(self, frame):
         """Store latest camera image"""
@@ -195,12 +236,12 @@ class VLMNavigation:
         """Store latest sensor data and record to raw data buffer"""
         self.latest_sensor_data = sensor_data
         
-        # Record all raw data with timestamp and action state
+        # Record all raw data with timestamp, action state, and policy decisions
         if sensor_data:
             # Create raw data record with dev machine time-of-day timestamp
             now = datetime.now()
             time_of_day = now.hour + now.minute/60.0 + now.second/3600.0 + now.microsecond/3600000000.0
-            time_of_day_rounded = round(time_of_day, 4)  # 0.01 second precision (4 decimal places = 0.0001 hours)
+            time_of_day_rounded = round(time_of_day, 4)  # 0.01 second precision
             
             # Calculate Solar_In using panel_current and LDR values
             ldr = sensor_data.get('ldr', {})
@@ -209,12 +250,28 @@ class VLMNavigation:
             ldr_avg = (ldr_left + ldr_right) / 2.0
             solar_in = panel_current(ldr_avg)
             
+            # Get current policy predictions if available
+            distance_scale = getattr(self, 'current_distance_scale', None)
+            stop_certainty = getattr(self, 'current_stop_certainty', None)
+            
+            # Use 0.0 for policy values if not yet computed
+            if distance_scale is None:
+                distance_scale = 0.0
+            if stop_certainty is None:
+                stop_certainty = 0.0
+            
+            # Policy inference timing (1 during inference, 0 otherwise)
+            policy_inference_marker = 1 if self.policy_inference_active else 0
+            
             record = {
-                'timestamp': time_of_day_rounded,  # Time of day in decimal hours (13.03 format)
+                'timestamp': time_of_day_rounded,
                 'action_state': self.current_action_state,
+                'distance_scale': distance_scale,      # New column: actor distance scaling
+                'stop_certainty': stop_certainty,      # New column: actor stop certainty
+                'policy_inference': policy_inference_marker,  # New column: policy inference timing
                 # Flatten all sensor data (excluding server timestamp and fake fields)
                 **self.flatten_sensor_data(sensor_data),
-                'Solar_In': solar_in  # Add Solar_In column
+                'Solar_In': solar_in
             }
             
             # Add to buffer
@@ -273,11 +330,8 @@ class VLMNavigation:
         flattened['bumper_left'] = bumpers.get('left', 0)
         flattened['bumper_right'] = bumpers.get('right', 0)
         
-        # Motion field only (explicitly exclude timestamp and fake fields from data_server)
+        # Motion field
         flattened['motion'] = sensor_data.get('motion', 'stop')
-        
-        # Note: Explicitly NOT including 'timestamp' or 'fake' fields from sensor_data
-        # as these are server-side fields we don't want in our raw data CSV
         
         return flattened
     
@@ -297,11 +351,12 @@ class VLMNavigation:
                 df.to_csv(self.raw_data_file, mode='w', header=True, index=False)
                 logger.info(f"📄 Raw data CSV created: {self.raw_data_file}")
             
-            # Print the latest raw values
-            latest_record = self.raw_data_buffer[-1]  # Get most recent record
+            # Print the latest raw values including policy decisions
+            latest_record = self.raw_data_buffer[-1]
             logger.info("📊 Latest Raw Values:")
             logger.info(f"  Time: {latest_record['timestamp']:.4f}h")
             logger.info(f"  State: {latest_record['action_state']}")
+            logger.info(f"  Policy: distance={latest_record['distance_scale']:.3f}m, stop_cert={latest_record['stop_certainty']:.3f}")
             logger.info(f"  IMU: roll={latest_record['imu_roll']:.2f}° pitch={latest_record['imu_pitch']:.2f}° yaw={latest_record['imu_yaw']:.2f}°")
             logger.info(f"  Encoders: L={latest_record['encoder_left']} R={latest_record['encoder_right']}")
             logger.info(f"  LDR: L={latest_record['ldr_left']} R={latest_record['ldr_right']}")
@@ -364,19 +419,116 @@ class VLMNavigation:
         self.vlm_thread = threading.Thread(target=vlm_processing_thread, daemon=True)
         self.vlm_thread.start()
     
-    def execute_action_immediately(self, action):
-        """Execute action and wait for natural completion with motion state detection"""
+    def get_policy_decision(self, image_path, sensor_data, vlm_action):
+        """
+        Get policy decision from multimodal actor model
+        
+        Args:
+            image_path: Path to the camera image
+            sensor_data: Sensor data dictionary
+            vlm_action: VLM action number (0-5)
+        
+        Returns:
+            tuple: (distance_scale, stop_certainty, should_stop)
+        """
+        try:
+            # Mark policy inference as active
+            self.policy_inference_active = True
+            
+            # Load image as PIL
+            image_pil = Image.open(image_path).convert('RGB')
+            
+            # Get multimodal policy decision
+            distance_scale, stop_certainty = self.actor.get_action(image_pil, sensor_data, vlm_action)
+            
+            # Debug logging
+            logger.info(f"🔍 Policy inference completed: distance={distance_scale:.3f}, certainty={stop_certainty:.3f}")
+            
+            # Save state to CSV (extract features for logging)
+            self.save_state_to_csv(image_pil, sensor_data, vlm_action, distance_scale, stop_certainty)
+            
+            # Determine if we should stop
+            should_stop = stop_certainty > self.stop_threshold
+            
+            logger.info(f"🎯 Multimodal Policy Decision: VLM_action={vlm_action}, distance={distance_scale:.3f}m, certainty={stop_certainty:.3f}, stop={should_stop}")
+            
+            return distance_scale, stop_certainty, should_stop
+            
+        except Exception as e:
+            logger.error(f"Multimodal policy decision failed: {e}")
+            return 0.3, 0.0, False  # Default values
+        finally:
+            # Reset policy inference flag
+            self.policy_inference_active = False
+    
+    def save_state_to_csv(self, image_pil, sensor_data, vlm_action, distance_scale, stop_certainty):
+        """Save multimodal policy input state to CSV file"""
+        try:
+            # Extract the same features the policy actor uses
+            multimodal_features = self.actor.extract_multimodal_features(image_pil, sensor_data, vlm_action)
+            
+            # Create state record with all 77 features
+            state_record = {
+                'cycle': self.cycle_count,
+                'timestamp': datetime.now().isoformat(),
+                'vlm_action': vlm_action,
+                'distance_scale': distance_scale,
+                'stop_certainty': stop_certainty,
+            }
+            
+            # Add all 77 multimodal features
+            for i, feature_val in enumerate(multimodal_features.detach().cpu().numpy()):
+                if i < 64:
+                    state_record[f'vision_{i}'] = feature_val
+                else:
+                    # Sensor features (13D) - match State.py but excluding solar_in and current_out
+                    sensor_idx = i - 64
+                    sensor_names = [
+                        'time_category',      # 0: time_category (0-23)
+                        'soc',                # 1: soc (0-100)
+                        'temperature',        # 2: temperature (°C)
+                        'humidity',           # 3: humidity (%RH)
+                        'pressure',           # 4: pressure (hPa)
+                        'roll',               # 5: roll (degrees)
+                        'pitch',              # 6: pitch (degrees)
+                        'ldr_left',           # 7: ldr_left (0-1023)
+                        'ldr_right',          # 8: ldr_right (0-1023)
+                        'bumper_hit',         # 9: bumper_hit (0 or 1)
+                        'encoder_left',       # 10: encoder_left
+                        'encoder_right',      # 11: encoder_right
+                        'action',             # 12: action (0-5)
+                    ]
+                    state_record[sensor_names[sensor_idx]] = feature_val
+            
+            # Initialize state CSV if first entry
+            if not self.state_csv_initialized:
+                df = pd.DataFrame([state_record])
+                df.to_csv(self.state_csv_path, index=False)
+                self.state_csv_initialized = True
+                logger.info(f"📄 Multimodal state CSV initialized: {self.state_csv_path}")
+            else:
+                # Append to existing state CSV
+                df = pd.DataFrame([state_record])
+                df.to_csv(self.state_csv_path, mode='a', header=False, index=False)
+            
+            logger.info(f"📊 Multimodal state saved: Cycle {self.cycle_count}, VLM_action {vlm_action}, Vision features: 64D, Sensor features: 13D")
+        except Exception as e:
+            logger.error(f"Failed to save multimodal state: {e}")
+    
+    def execute_action_immediately(self, action, distance_scale):
+        """Execute action with policy-scaled distance and wait for natural completion"""
         # Set action state
         self.current_action_state = str(action)
         self.action_start_time = time.time()
         
         action_info = self.actions[action]
         angle = action_info["angle"]
-        total_distance = action_info["base_distance"]
-        description = action_info["desc"]
+        # Use policy distance scale directly (0.3-0.6m) instead of multiplying base distance
+        total_distance = distance_scale if action_info["base_distance"] > 0 else 0
+        description = action_info["desc"].replace("[scaled]", f"{total_distance:.3f}m")
         
         logger.info(f"🎯 Executing: {description}")
-        logger.info(f"   Angle: {angle}°, Distance: {total_distance:.3f}m")
+        logger.info(f"   Angle: {angle}°, Distance: {total_distance:.3f}m (multimodal policy distance)")
         
         # Special handling for action 0 (turn only)
         if action == 0:
@@ -399,7 +551,7 @@ class VLMNavigation:
             self.wait_for_motion_stop(timeout=10.0)
             logger.info("✅ Turn completed")
         
-        # Move forward with calculated distance
+        # Move forward with policy distance
         if total_distance > 0:
             logger.info(f"➡️ Starting forward movement: {total_distance:.3f}m")
             self.command_client.move_forward(total_distance)
@@ -440,100 +592,119 @@ class VLMNavigation:
         return False
     
     def navigation_cycle(self):
-        """Optimized VLM navigation cycle with immediate processing (runs forever until stopped)"""
+        """VLM navigation cycle with multimodal policy integration"""
         self.cycle_count += 1
         logger.info(f"\n{'='*60}")
-        logger.info(f"🧠 VLM NAVIGATION CYCLE #{self.cycle_count}")
+        logger.info(f"🧠 VLM MULTIMODAL POLICY NAVIGATION CYCLE #{self.cycle_count}")
         logger.info(f"{'='*60}")
-        # Only proceed if robot is in idle state (action fully completed)
+        
+        # Only proceed if robot is in idle state
         if self.current_action_state != "idle":
             logger.warning(f"⚠️ Robot still in action state: {self.current_action_state}, waiting...")
             return
-        # Additional safety stop (robot should already be stopped from previous action)
+        
+        # Additional safety stop
         self.command_client.stop()
+        
         if self.latest_image is None:
             logger.warning("⏳ No camera image available")
             return
+        
         try:
             # Mark this as a state instance (critical data episode)
-            # This will be reset to False after the first sensor reading is recorded
             self.state_instance = True
-            # Image Capture and Annotation Phase (immediate)
+            
+            # Image Capture and Annotation Phase
             timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
             logger.info("📸 Capturing and annotating image...")
+            
             # Save image
             image_file = f"cycle_{self.cycle_count:03d}_{timestamp_str}.jpg"
             image_path = f"{self.session_dir}/images/{image_file}"
             cv2.imwrite(image_path, self.latest_image)
+            
             # Annotate image and save to annotated folder
             annotated_path = f"{self.session_dir}/annotated/{image_file}"
             annotate_image(image_path, annotated_path)
-            # Start VLM processing immediately in background, using annotated image
+            
+            # Start VLM processing immediately in background
             self.start_vlm_processing_async(image_path, annotated_path, timestamp_str, image_file)
-            # Always wait full 0.3 seconds for VLM stability
-            logger.info("⏳ Waiting 0.3s for VLM stability...")
-            time.sleep(0.3)
-            # Check if VLM processing is complete
-            if not self.vlm_processing and self.vlm_result:
-                # VLM finished during wait - execute action
-                result = self.vlm_result
-                action = result['action']
-                logger.info(f"🚀 VLM ready! Executing action {action}")
-                # Add action label and save reasoning
-                self.add_action_label_to_image(result['annotated_path'], action)
-                self.save_vlm_reasoning(action, result['reasoning'], result['timestamp_str'], result['image_file'])
-                # Execute action (this will handle all timing internally)
-                self.execute_action_immediately(action)
-            else:
-                # VLM still processing - wait for completion
-                logger.info("🧠 VLM still processing, waiting for completion...")
-                # Wait for VLM to complete (with timeout)
-                timeout = 10.0  # 10 second timeout
-                start_wait = time.time()
-                while self.vlm_processing and (time.time() - start_wait) < timeout:
-                    time.sleep(0.1)
-                if self.vlm_result:
-                    result = self.vlm_result
-                    action = result['action']
-                    logger.info(f"🚀 VLM completed! Executing action {action}")
-                    # Add action label and save reasoning
-                    self.add_action_label_to_image(result['annotated_path'], action)
-                    self.save_vlm_reasoning(action, result['reasoning'], result['timestamp_str'], result['image_file'])
-                    # Execute action (this will handle all timing internally)
-                    self.execute_action_immediately(action)
-                else:
-                    logger.error("❌ VLM processing timed out")
-                    return
+            
+            # Wait for VLM processing to complete to get the action
+            logger.info("⏳ Waiting for VLM processing to get action...")
+            timeout = 10.0
+            start_wait = time.time()
+            while self.vlm_processing and (time.time() - start_wait) < timeout:
+                time.sleep(0.1)
+            
+            if not self.vlm_result:
+                logger.error("❌ VLM processing failed or timed out")
+                return
+            
+            # Get VLM action
+            vlm_action = self.vlm_result['action']
+            logger.info(f"🧠 VLM Action: {vlm_action}")
+            
+            # Now get multimodal policy decision using VLM action and image
+            distance_scale, stop_certainty, should_stop = self.get_policy_decision(image_path, self.latest_sensor_data, vlm_action)
+            
+            # Store current policy decisions for data recording
+            self.current_distance_scale = distance_scale
+            self.current_stop_certainty = stop_certainty
+            
+            # Check if policy wants to stop
+            if should_stop:
+                logger.info(f"🛑 Multimodal policy decision: STOP (certainty={stop_certainty:.3f} > {self.stop_threshold})")
+                self.command_client.stop()
+                # Save the stop decision
+                self.save_vlm_reasoning(0, f"Multimodal policy stop decision: certainty={stop_certainty:.3f}", 
+                                       timestamp_str, image_file, distance_scale, stop_certainty)
+                return
+            
+            # Execute action with policy scaling
+            result = self.vlm_result
+            logger.info(f"🚀 Executing VLM action {vlm_action} with multimodal policy scaling")
+            
+            # Add action label and save reasoning
+            self.add_action_label_to_image(result['annotated_path'], vlm_action, distance_scale, stop_certainty)
+            self.save_vlm_reasoning(vlm_action, result['reasoning'], result['timestamp_str'], 
+                                   result['image_file'], distance_scale, stop_certainty)
+            
+            # Execute action with policy-scaled distance
+            self.execute_action_immediately(vlm_action, distance_scale)
+                    
         except Exception as e:
             logger.error(f"Navigation cycle failed: {e}")
             self.current_action_state = "idle"
             self.command_client.stop()
     
-    def add_action_label_to_image(self, image_path, action):
-        """Add action label to annotated image"""
-        # Load the image
+    def add_action_label_to_image(self, image_path, action, distance_scale, stop_certainty):
+        """Add action and policy information to annotated image"""
         img = cv2.imread(image_path)
         if img is None:
             logger.error(f"Unable to load image for action annotation: {image_path}")
             return
 
-        # Define annotation text and position
-        annotation_text = f"Executed Action: {action}"
-        position = (50, 50)  # Top-left corner
+        # Action annotation
+        action_text = f"Action: {action}"
+        policy_text = f"Multimodal Policy: {distance_scale:.3f}m, stop={stop_certainty:.3f}"
+        
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 1
-        font_color = (0, 255, 255)  # Yellow (BGR format)
+        font_scale = 0.8
         thickness = 2
-
-        # Add text annotation to the image
-        cv2.putText(img, annotation_text, position, font, font_scale, font_color, thickness)
+        
+        # Action label (yellow)
+        cv2.putText(img, action_text, (50, 50), font, font_scale, (0, 255, 255), thickness)
+        
+        # Policy label (cyan)
+        cv2.putText(img, policy_text, (50, 80), font, font_scale, (255, 255, 0), thickness)
 
         # Save the updated image
         cv2.imwrite(image_path, img, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        logger.info(f"🏷️ Action annotation added: {annotation_text}")
+        logger.info(f"🏷️ Action and multimodal policy annotations added")
     
-    def save_vlm_reasoning(self, action, reasoning, timestamp_str, image_file):
-        """Save VLM reasoning to CSV file"""
+    def save_vlm_reasoning(self, action, reasoning, timestamp_str, image_file, distance_scale, stop_certainty):
+        """Save VLM reasoning and policy decisions to CSV file"""
         try:
             reasoning_data = {
                 'cycle': self.cycle_count,
@@ -541,6 +712,8 @@ class VLMNavigation:
                 'timestamp_str': timestamp_str,
                 'image_file': image_file,
                 'action': action,
+                'distance_scale': distance_scale,
+                'stop_certainty': stop_certainty,
                 'reasoning': reasoning.replace('\n', ' ').replace('\r', ' ')  # Clean reasoning text
             }
             
@@ -555,35 +728,12 @@ class VLMNavigation:
                 df = pd.DataFrame([reasoning_data])
                 df.to_csv(self.reasoning_csv_path, mode='a', header=False, index=False)
             
-            logger.info(f"💭 VLM reasoning saved: Cycle {self.cycle_count}, Action {action}")
+            logger.info(f"💭 VLM reasoning saved: Cycle {self.cycle_count}, Action {action}, Multimodal Policy {distance_scale:.3f}m/{stop_certainty:.3f}")
         except Exception as e:
             logger.error(f"Failed to save VLM reasoning: {e}")
     
-    def execute_action(self, action, total_distance):
-        """Execute action with specified total distance"""
-        action_info = self.actions[action]
-        angle = action_info["angle"]
-        description = action_info["desc"]
-        
-        logger.info(f"🎯 Executing: {description}")
-        logger.info(f"   Angle: {angle}°, Distance: {total_distance:.3f}m")
-        
-        # Turn first if needed
-        if angle != 0:
-            self.command_client.turn(angle)
-            time.sleep(abs(angle) / 30)  # Rough timing based on turn rate
-        
-        # Move forward with calculated distance
-        self.command_client.move_forward(total_distance)
-        
-        # Wait for movement to complete (rough estimate)
-        move_time = max(2.0, total_distance * 1.5)  # At least 2 seconds, scale with distance
-        time.sleep(move_time)
-        
-        return f"Action {action}: {angle}° turn, {total_distance:.3f}m forward"
-    
     def run(self):
-        """Main run loop with pause/resume support (type 'p' and press Enter to pause/resume)"""
+        """Main run loop with pause/resume support"""
         global paused
         self.running = True
         
@@ -618,9 +768,10 @@ class VLMNavigation:
                     continue
                     
                 self.navigation_cycle()
-                time.sleep(self.navigation_interval)  # Minimal delay (0.1s)
+                time.sleep(self.navigation_interval)
+                
         except KeyboardInterrupt:
-            logger.info("🛑 VLM Navigation stopped by user")
+            logger.info("🛑 VLM Multimodal Policy Navigation stopped by user")
         finally:
             # Save any remaining raw data
             self.save_raw_data_buffer()
@@ -629,25 +780,17 @@ class VLMNavigation:
             logger.info("💾 Final raw data save completed")
 
 def main():
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='VLM Navigation with Optimized Timing + Raw Data Recording')
-    parser.add_argument('--server-ip', type=str, default='10.102.225.181',
-                      help='IP address of the robot running data_server.py')
-    parser.add_argument('--goal', type=str, default='Max Sunlight Location',
-                      help='Navigation goal for VLM')
-    parser.add_argument('--max-iterations', type=int, default=10,
-                      help='Maximum number of navigation cycles (not used - runs forever)')
-    args = parser.parse_args()
-    
-    # Create and run VLM navigation
-    vlm_nav = VLMNavigation(
-        server_ip=args.server_ip,
-        goal=args.goal,
-        max_iterations=args.max_iterations
+    # Create and run VLM multimodal policy navigation with defaults
+    vlm_policy = VLMPolicyNavigation(
+        server_ip="10.102.225.181",
+        goal="Max Sunlight Location", 
+        max_iterations=10,
+        model_path=None,  # Use randomly initialized model
+        stop_threshold=0.95,
+        device='cuda'
     )
     
-    vlm_nav.run()
+    vlm_policy.run()
 
 if __name__ == '__main__':
     main() 
